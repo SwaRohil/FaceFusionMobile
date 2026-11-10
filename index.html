@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>FaceFusion Pro</title>
+<script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh;padding:12px 12px 40px}
+h1{text-align:center;background:linear-gradient(135deg,#7C4DFF,#00E5FF);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-size:30px;margin:8px 0 2px;letter-spacing:-0.5px}
+.sub{text-align:center;color:#666;font-size:12px;margin-bottom:16px}
+.card{background:linear-gradient(145deg,#1a1a2e,#16213e);border:1px solid #222;border-radius:16px;padding:14px;margin-bottom:12px}
+.card h3{margin-bottom:8px;color:#00E5FF;font-size:14px;display:flex;align-items:center;gap:6px}
+.badge{background:#7C4DFF;color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+label.btn{display:flex;align-items:center;justify-content:center;gap:6px;background:linear-gradient(135deg,#7C4DFF,#6200EA);color:#fff;padding:14px 8px;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;text-align:center;transition:all 0.2s}
+label.btn:active{transform:scale(0.97);filter:brightness(0.9)}
+label.btn.ok{background:linear-gradient(135deg,#2e7d32,#1b5e20)}
+input[type=file]{display:none}
+.preview{width:100%;max-height:180px;object-fit:contain;border-radius:8px;margin-top:8px;display:none;background:#000;border:1px solid #333}
+button.swap{width:100%;padding:16px;background:linear-gradient(135deg,#FF6D00,#FF9100);color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:700;cursor:pointer;margin:6px 0;letter-spacing:0.5px;box-shadow:0 4px 15px rgba(255,109,0,0.3)}
+button.swap:disabled{background:#333;color:#666;box-shadow:none}
+button.swap:active:not(:disabled){transform:scale(0.98)}
+#status{text-align:center;padding:8px;font-size:13px;color:#888;min-height:36px}
+#result{width:100%;border-radius:12px;display:none;margin:8px 0;border:2px solid #7C4DFF}
+.save-btn{width:100%;padding:14px;background:linear-gradient(135deg,#00E5FF,#00B8D4);color:#000;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;display:none}
+.save-btn:active{transform:scale(0.98)}
+#loadBar{width:100%;height:4px;background:#222;border-radius:2px;overflow:hidden;margin:6px 0;display:none}
+#loadFill{height:100%;background:linear-gradient(90deg,#7C4DFF,#00E5FF);width:0%;transition:width 0.3s}
+.opts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.opt{background:#111;border:1px solid #333;border-radius:8px;padding:8px 10px;font-size:12px;color:#aaa;flex:1;min-width:120px}
+.opt label{display:block;color:#888;font-size:10px;margin-bottom:4px;text-transform:uppercase}
+.opt input[type=range]{width:100%;accent-color:#7C4DFF}
+.opt span{color:#7C4DFF;font-weight:700}
+.info{font-size:11px;color:#444;text-align:center;margin-top:10px}
+.compare{display:flex;gap:4px;margin:8px 0}
+.compare img{flex:1;border-radius:8px;border:1px solid #333}
+canvas{display:none}
+</style>
+</head>
+<body>
+
+<h1>FaceFusion Pro</h1>
+<p class="sub">Realistic Browser Face Swap &bull; All processing on-device</p>
+
+<div class="card">
+  <h3>AI Engine <span class="badge">v2</span></h3>
+  <div id="loadBar"><div id="loadFill"></div></div>
+  <div id="modelStatus" style="font-size:12px">Initializing...</div>
+</div>
+
+<div class="card">
+  <h3>1. Source Face</h3>
+  <label class="btn" id="srcBtn">Pick Source Photo<input type="file" accept="image/*" id="srcFile"></label>
+  <img class="preview" id="srcPreview">
+</div>
+
+<div class="card">
+  <h3>2. Target Image</h3>
+  <label class="btn" id="tgtBtn">Pick Target Photo<input type="file" accept="image/*" id="tgtFile"></label>
+  <img class="preview" id="tgtPreview">
+</div>
+
+<div class="card">
+  <h3>Settings</h3>
+  <div class="opts">
+    <div class="opt">
+      <label>Blend Smoothness</label>
+      <input type="range" id="blendSlider" min="5" max="30" value="15">
+      <span id="blendVal">15</span>px feather
+    </div>
+    <div class="opt">
+      <label>Color Match</label>
+      <input type="range" id="colorSlider" min="0" max="100" value="80">
+      <span id="colorVal">80</span>%
+    </div>
+  </div>
+</div>
+
+<button class="swap" id="swapBtn" disabled>Swap Faces</button>
+<div id="status"></div>
+<img id="result">
+<button class="save-btn" id="saveBtn">Save to Phone</button>
+<p class="info">100% private. Nothing leaves your phone. Models run in-browser via WebGL.</p>
+
+<canvas id="c1"></canvas>
+<canvas id="c2"></canvas>
+<canvas id="cOut"></canvas>
+<canvas id="cTmp"></canvas>
+
+<script>
+const $=id=>document.getElementById(id);
+let srcImg=null,tgtImg=null,modelsReady=false;
+
+$('blendSlider').oninput=e=>{$('blendVal').textContent=e.target.value};
+$('colorSlider').oninput=e=>{$('colorVal').textContent=e.target.value};
+
+async function loadModels(){
+  const U='https://justadudewhohacks.github.io/face-api.js/models';
+  const bar=$('loadBar'),fill=$('loadFill'),st=$('modelStatus');
+  bar.style.display='block';
+  try{
+    st.textContent='Loading SSD detector...';fill.style.width='15%';
+    await faceapi.nets.ssdMobilenetv1.loadFromUri(U);
+    st.textContent='Loading landmarks...';fill.style.width='40%';
+    await faceapi.nets.faceLandmark68Net.loadFromUri(U);
+    st.textContent='Loading recognition...';fill.style.width='70%';
+    await faceapi.nets.faceRecognitionNet.loadFromUri(U);
+    st.textContent='Loading expression model...';fill.style.width='90%';
+    await faceapi.nets.faceExpressionNet.loadFromUri(U);
+    fill.style.width='100%';
+    st.innerHTML='<span style="color:#4caf50">Models ready!</span> All AI running locally.';
+    modelsReady=true;checkReady();
+  }catch(e){st.textContent='Failed: '+e.message;st.style.color='#f44336'}
+}
+
+function loadImg(file,prev,cb){
+  const r=new FileReader();
+  r.onload=e=>{
+    const img=new Image();
+    img.onload=()=>{
+      prev.src=e.target.result;prev.style.display='block';
+      const MAX=1536;let w=img.width,h=img.height;
+      if(w>MAX||h>MAX){const s=MAX/Math.max(w,h);w=Math.round(w*s);h=Math.round(h*s)}
+      const c=document.createElement('canvas');c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      const out=new Image();out.onload=()=>cb(out);out.src=c.toDataURL('image/jpeg',0.95);
+    };img.src=e.target.result;
+  };r.readAsDataURL(file);
+}
+
+$('srcFile').onchange=e=>{if(!e.target.files[0])return;loadImg(e.target.files[0],$('srcPreview'),img=>{srcImg=img;$('srcBtn').classList.add('ok');$('srcBtn').textContent='Source loaded';checkReady()})};
+$('tgtFile').onchange=e=>{if(!e.target.files[0])return;loadImg(e.target.files[0],$('tgtPreview'),img=>{tgtImg=img;$('tgtBtn').classList.add('ok');$('tgtBtn').textContent='Target loaded';checkReady()})};
+function checkReady(){$('swapBtn').disabled=!(modelsReady&&srcImg&&tgtImg)}
+
+async function detectFaces(img){
+  return faceapi.detectAllFaces(img,new faceapi.SsdMobilenetv1Options({minConfidence:0.3}))
+    .withFaceLandmarks().withFaceDescriptors();
+}
+
+/* ===== COLOR SPACE ===== */
+function rgb2lab(r,g,b){
+  let rr=r/255,gg=g/255,bb=b/255;
+  rr=rr>0.04045?Math.pow((rr+0.055)/1.055,2.4):rr/12.92;
+  gg=gg>0.04045?Math.pow((gg+0.055)/1.055,2.4):gg/12.92;
+  bb=bb>0.04045?Math.pow((bb+0.055)/1.055,2.4):bb/12.92;
+  let x=(rr*0.4124564+gg*0.3575761+bb*0.1804375)/0.95047;
+  let y=(rr*0.2126729+gg*0.7151522+bb*0.0721750)/1.0;
+  let z=(rr*0.0193339+gg*0.1191920+bb*0.9503041)/1.08883;
+  const f=t=>t>0.008856?Math.cbrt(t):7.787*t+16/116;
+  x=f(x);y=f(y);z=f(z);
+  return[116*y-16,500*(x-y),200*(y-z)];
+}
+
+function lab2rgb(L,a,b){
+  let y=(L+16)/116,x=a/500+y,z=y-b/200;
+  const f=t=>{const t3=t*t*t;return t3>0.008856?t3:(t-16/116)/7.787};
+  x=0.95047*f(x);y=1.0*f(y);z=1.08883*f(z);
+  let r=x*3.2404542+y*-1.5371385+z*-0.4985314;
+  let g=x*-0.9692660+y*1.8760108+z*0.0415560;
+  let bl=x*0.0556434+y*-0.2040259+z*1.0572252;
+  const gam=c=>c>0.0031308?1.055*Math.pow(c,1/2.4)-0.055:12.92*c;
+  return[Math.round(Math.max(0,Math.min(255,gam(r)*255))),Math.round(Math.max(0,Math.min(255,gam(g)*255))),Math.round(Math.max(0,Math.min(255,gam(bl)*255)))];
+}
+
+/* ===== COLOR TRANSFER ===== */
+function colorTransfer(srcData,tgtData,mask,strength){
+  const w=srcData.width,h=srcData.height;
+  const sd=srcData.data,td=tgtData.data,m=mask.data;
+  let sL=0,sa=0,sb=0,tL=0,ta=0,tb=0,cnt=0;
+  let sL2=0,sa2=0,sb2=0,tL2=0,ta2=0,tb2=0;
+  for(let i=0;i<w*h;i++){
+    if(m[i*4]<128)continue;
+    const si=i*4;
+    const sl=rgb2lab(sd[si],sd[si+1],sd[si+2]);
+    const tl=rgb2lab(td[si],td[si+1],td[si+2]);
+    sL+=sl[0];sa+=sl[1];sb+=sl[2];
+    tL+=tl[0];ta+=tl[1];tb+=tl[2];
+    sL2+=sl[0]*sl[0];sa2+=sl[1]*sl[1];sb2+=sl[2]*sl[2];
+    tL2+=tl[0]*tl[0];ta2+=tl[1]*tl[1];tb2+=tl[2]*tl[2];
+    cnt++;
+  }
+  if(cnt<10)return;
+  sL/=cnt;sa/=cnt;sb/=cnt;tL/=cnt;ta/=cnt;tb/=cnt;
+  const sLs=Math.sqrt(sL2/cnt-sL*sL)||1,saS=Math.sqrt(sa2/cnt-sa*sa)||1,sbS=Math.sqrt(sb2/cnt-sb*sb)||1;
+  const tLs=Math.sqrt(tL2/cnt-tL*tL)||1,taS=Math.sqrt(ta2/cnt-ta*ta)||1,tbS=Math.sqrt(tb2/cnt-tb*tb)||1;
+  const str=strength/100;
+  for(let i=0;i<w*h;i++){
+    if(m[i*4]<128)continue;
+    const si=i*4;
+    let lab=rgb2lab(sd[si],sd[si+1],sd[si+2]);
+    lab[0]=tL+(lab[0]-sL)*(tLs/sLs);
+    lab[1]=ta+(lab[1]-sa)*(taS/saS);
+    lab[2]=tb+(lab[2]-sb)*(tbS/sbS);
+    const rgb=lab2rgb(lab[0],lab[1],lab[2]);
+    sd[si]=Math.round(sd[si]*(1-str)+rgb[0]*str);
+    sd[si+1]=Math.round(sd[si+1]*(1-str)+rgb[1]*str);
+    sd[si+2]=Math.round(sd[si+2]*(1-str)+rgb[2]*str);
+  }
+}
+
+/* ===== DELAUNAY ===== */
+function triangulate(pts){
+  const n=pts.length;if(n<3)return[];
+  let mnx=Infinity,mny=Infinity,mxx=-Infinity,mxy=-Infinity;
+  for(const p of pts){mnx=Math.min(mnx,p.x);mny=Math.min(mny,p.y);mxx=Math.max(mxx,p.x);mxy=Math.max(mxy,p.y)}
+  const dm=Math.max(mxx-mnx,mxy-mny)*10,cx=(mnx+mxx)/2,cy=(mny+mxy)/2;
+  const P=[...pts,{x:cx-dm,y:cy-dm},{x:cx+dm,y:cy-dm},{x:cx,y:cy+dm}];
+  let T=[[n,n+1,n+2]];
+  function cc(a,b,c){
+    const ax=P[a].x,ay=P[a].y,bx=P[b].x,by=P[b].y,cx2=P[c].x,cy2=P[c].y;
+    const D=2*(ax*(by-cy2)+bx*(cy2-ay)+cx2*(ay-by));
+    if(Math.abs(D)<1e-10)return{x:0,y:0,r:Infinity};
+    const ux=((ax*ax+ay*ay)*(by-cy2)+(bx*bx+by*by)*(cy2-ay)+(cx2*cx2+cy2*cy2)*(ay-by))/D;
+    const uy=((ax*ax+ay*ay)*(cx2-bx)+(bx*bx+by*by)*(ax-cx2)+(cx2*cx2+cy2*cy2)*(bx-ax))/D;
+    return{x:ux,y:uy,r:Math.hypot(ax-ux,ay-uy)};
+  }
+  for(let i=0;i<n;i++){
+    const p=P[i],bad=[];
+    for(let j=0;j<T.length;j++){const c=cc(T[j][0],T[j][1],T[j][2]);if((p.x-c.x)**2+(p.y-c.y)**2<c.r*c.r)bad.push(j)}
+    const edges=[];
+    for(const bi of bad){const t=T[bi];for(let e=0;e<3;e++){const e1=t[e],e2=t[(e+1)%3];let sh=false;for(const bj of bad){if(bj===bi)continue;const t2=T[bj];for(let f=0;f<3;f++){if((t2[f]===e1&&t2[(f+1)%3]===e2)||(t2[f]===e2&&t2[(f+1)%3]===e1)){sh=true;break}}if(sh)break}if(!sh)edges.push([e1,e2])}}
+    const bs=new Set(bad);T=T.filter((_,i)=>!bs.has(i));
+    for(const[e1,e2]of edges)T.push([e1,e2,i]);
+  }
+  return T.filter(t=>t[0]<n&&t[1]<n&&t[2]<n);
+}
+
+/* ===== WARP ===== */
+function warpTri(sCtx,dCtx,s0,s1,s2,t0,t1,t2){
+  const det=(t1.x-t0.x)*(t2.y-t0.y)-(t2.x-t0.x)*(t1.y-t0.y);
+  if(Math.abs(det)<0.1)return;
+  const a=((s1.x-s0.x)*(t2.y-t0.y)-(s2.x-s0.x)*(t1.y-t0.y))/det;
+  const b=((s2.x-s0.x)*(t1.x-t0.x)-(s1.x-s0.x)*(t2.x-t0.x))/det;
+  const c=((s1.y-s0.y)*(t2.y-t0.y)-(s2.y-s0.y)*(t1.y-t0.y))/det;
+  const d=((s2.y-s0.y)*(t1.x-t0.x)-(s1.y-s0.y)*(t2.x-t0.x))/det;
+  const e=s0.x-a*t0.x-b*t0.y,f=s0.y-c*t0.x-d*t0.y;
+  dCtx.save();dCtx.beginPath();dCtx.moveTo(t0.x,t0.y);dCtx.lineTo(t1.x,t1.y);dCtx.lineTo(t2.x,t2.y);dCtx.closePath();dCtx.clip();
+  dCtx.setTransform(a,c,b,d,e,f);dCtx.drawImage(sCtx.canvas,0,0);dCtx.restore();
+}
+
+/* ===== CONVEX HULL ===== */
+function hull(pts){
+  const s=pts.slice().sort((a,b)=>a.x-b.x||a.y-b.y);
+  if(s.length<=2)return s;
+  const cr=(O,A,B)=>(A.x-O.x)*(B.y-O.y)-(A.y-O.y)*(B.x-O.x);
+  const lo=[];for(const p of s){while(lo.length>=2&&cr(lo[lo.length-2],lo[lo.length-1],p)<=0)lo.pop();lo.push(p)}
+  const up=[];for(let i=s.length-1;i>=0;i--){const p=s[i];while(up.length>=2&&cr(up[up.length-2],up[up.length-1],p)<=0)up.pop();up.push(p)}
+  lo.pop();up.pop();return lo.concat(up);
+}
+
+/* ===== SEAMLESS BLEND ===== */
+function seamlessBlend(outData,swapData,maskData,w,h,feather){
+  const od=outData.data,sd=swapData.data,md=maskData.data;
+  const diff=new Float32Array(w*h*3);
+  for(let i=0;i<w*h;i++){
+    if(md[i*4]<128)continue;
+    const si=i*4;
+    diff[i*3]=sd[si]-od[si];diff[i*3+1]=sd[si+1]-od[si+1];diff[i*3+2]=sd[si+2]-od[si+2];
+  }
+  for(let iter=0;iter<3;iter++){
+    const tmp=new Float32Array(diff);
+    for(let y=1;y<h-1;y++){
+      for(let x=1;x<w-1;x++){
+        const i=y*w+x;
+        if(md[i*4]<128)continue;
+        for(let c=0;c<3;c++){
+          tmp[i*3+c]=(diff[(i-1)*3+c]+diff[(i+1)*3+c]+diff[(i-w)*3+c]+diff[(i+w)*3+c])*0.25;
+        }
+      }
+    }
+    diff.set(tmp);
+  }
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const i=y*w+x;
+      if(md[i*4]<1)continue;
+      const edge=distEdge(x,y,arguments[6]||[]);
+      const alpha=Math.min(1,edge/Math.max(1,feather))*(md[i*4]/255);
+      const si=i*4;
+      od[si]=Math.round(Math.max(0,Math.min(255,od[si]+diff[i*3]*alpha)));
+      od[si+1]=Math.round(Math.max(0,Math.min(255,od[si+1]+diff[i*3+1]*alpha)));
+      od[si+2]=Math.round(Math.max(0,Math.min(255,od[si+2]+diff[i*3+2]*alpha)));
+    }
+  }
+}
+
+function distEdge(px,py,h){
+  if(!h||h.length<3)return 999;
+  let mn=Infinity;
+  for(let i=0;i<h.length;i++){
+    const a=h[i],b=h[(i+1)%h.length];
+    const dx=b.x-a.x,dy=b.y-a.y,l2=dx*dx+dy*dy;
+    let t=l2>0?((px-a.x)*dx+(py-a.y)*dy)/l2:0;
+    t=Math.max(0,Math.min(1,t));
+    const d=Math.hypot(px-(a.x+t*dx),py-(a.y+t*dy));
+    if(d<mn)mn=d;
+  }
+  return mn;
+}
+
+/* ===== MAIN SWAP ===== */
+async function swapFaces(){
+  const st=$('status'),feather=+$('blendSlider').value,colorStr=+$('colorSlider').value;
+  st.textContent='Detecting faces in source...';st.style.color='#aaa';
+  const srcF=await detectFaces(srcImg);
+  st.textContent=`${srcF.length} source face(s). Detecting target...`;
+  const tgtF=await detectFaces(tgtImg);
+  if(!srcF.length){st.textContent='No face in source.';st.style.color='#f44';return}
+  if(!tgtF.length){st.textContent='No face in target.';st.style.color='#f44';return}
+
+  const count=Math.min(srcF.length,tgtF.length,10);
+  st.textContent=`Swapping ${count} face(s) with color matching...`;
+  await new Promise(r=>setTimeout(r,50));
+
+  const outC=$('cOut');outC.width=tgtImg.width;outC.height=tgtImg.height;
+  const ctx=outC.getContext('2d');ctx.drawImage(tgtImg,0,0);
+
+  const srcC=$('c1');srcC.width=srcImg.width;srcC.height=srcImg.height;
+  const srcCtx=srcC.getContext('2d');srcCtx.drawImage(srcImg,0,0);
+
+  for(let f=0;f<count;f++){
+    st.textContent=`Processing face ${f+1}/${count}...`;
+    await new Promise(r=>setTimeout(r,30));
+
+    const srcLm=srcF[f].landmarks.positions.map(p=>({x:p.x,y:p.y}));
+    const tgtLm=tgtF[f].landmarks.positions.map(p=>({x:p.x,y:p.y}));
+
+    const innerIdx=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67];
+    const srcInner=innerIdx.map(i=>srcLm[i]);
+    const tgtInner=innerIdx.map(i=>tgtLm[i]);
+
+    const allTgt=[...tgtInner];const allSrc=[...srcInner];
+    const mg=30;
+    const corners=[{x:-mg,y:-mg},{x:tgtImg.width+mg,y:-mg},{x:tgtImg.width+mg,y:tgtImg.height+mg},{x:-mg,y:tgtImg.height+mg}];
+    for(const c of corners){allTgt.push(c);allSrc.push(c)}
+
+    const tris=triangulate(allTgt);
+    const tmpC=$('cTmp');tmpC.width=tgtImg.width;tmpC.height=tgtImg.height;
+    const tmpCtx=tmpC.getContext('2d');tmpCtx.clearRect(0,0,tmpC.width,tmpC.height);
+
+    for(const tri of tris){
+      if(tri[0]>=innerIdx.length||tri[1]>=innerIdx.length||tri[2]>=innerIdx.length)continue;
+      warpTri(srcCtx,tmpCtx,srcInner[tri[0]],srcInner[tri[1]],srcInner[tri[2]],tgtInner[tri[0]],tgtInner[tri[1]],tgtInner[tri[2]]);
+    }
+
+    const h2=hull(tgtInner);
+    const maskC=document.createElement('canvas');maskC.width=tgtImg.width;maskC.height=tgtImg.height;
+    const maskCtx=maskC.getContext('2d');
+
+    const cx2=h2.reduce((s,p)=>s+p.x,0)/h2.length;
+    const cy2=h2.reduce((s,p)=>s+p.y,0)/h2.length;
+    const grad=maskCtx.createRadialGradient(cx2,cy2,0,cx2,cy2,Math.max(...h2.map(p=>Math.hypot(p.x-cx2,p.y-cy2)))*1.1);
+    grad.addColorStop(0,'rgba(255,255,255,1)');
+    grad.addColorStop(0.7,'rgba(255,255,255,1)');
+    grad.addColorStop(1,'rgba(255,255,255,0)');
+    maskCtx.fillStyle=grad;
+    maskCtx.beginPath();maskCtx.moveTo(h2[0].x,h2[0].y);
+    for(let i=1;i<h2.length;i++)maskCtx.lineTo(h2[i].x,h2[i].y);
+    maskCtx.closePath();maskCtx.fill();
+
+    if(colorStr>0){
+      const srcImgData=tmpCtx.getImageData(0,0,tmpC.width,tmpC.height);
+      const tgtImgData=ctx.getImageData(0,0,outC.width,outC.height);
+      const maskImgData=maskCtx.getImageData(0,0,maskC.width,maskC.height);
+      colorTransfer(srcImgData,tgtImgData,maskImgData,colorStr);
+      tmpCtx.putImageData(srcImgData,0,0);
+    }
+
+    const swapData=tmpCtx.getImageData(0,0,tmpC.width,tmpC.height);
+    const outData=ctx.getImageData(0,0,outC.width,outC.height);
+    const maskData=maskCtx.getImageData(0,0,maskC.width,maskC.height);
+    seamlessBlend(outData,swapData,maskData,outC.width,outC.height,feather,h2);
+    ctx.putImageData(outData,0,0);
+  }
+
+  $('result').src=outC.toDataURL('image/png');
+  $('result').style.display='block';
+  $('saveBtn').style.display='block';
+  st.textContent='Done! Tap Save to download.';st.style.color='#4caf50';
+}
+
+$('swapBtn').onclick=swapFaces;
+$('saveBtn').onclick=()=>{const a=document.createElement('a');a.download='facefusion_'+Date.now()+'.png';a.href=$('result').src;a.click()};
+
+window.addEventListener('load',()=>{
+  if(typeof faceapi!=='undefined')loadModels();
+  else{const c=setInterval(()=>{if(typeof faceapi!=='undefined'){clearInterval(c);loadModels()}},200);setTimeout(()=>clearInterval(c),15000)}
+});
+</script>
+</body>
+</html>
