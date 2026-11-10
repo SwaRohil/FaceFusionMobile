@@ -27,6 +27,23 @@ Open `index.html` in a mobile browser and use **Add to Home Screen** (PWA). Mode
 
 No accounts, no analytics, no telemetry. Your photos and videos are never uploaded. Bug reports are assembled only when you tap **Share bug report** and contain no media.
 
+## Content checker
+
+An on-device NSFW classifier (NSFWJS MobileNetV2, TensorFlow.js) runs **before any processing**, on every input path:
+
+| Path | What is checked |
+|---|---|
+| Source face | At pick time, and again before each run |
+| Target photo | At pick time, and again before each run |
+| Target video | Up to 8 frames sampled across the trim range |
+| Animator driver | Sampled frames at pick time |
+| Live camera | First frame, then re-checked every 1.5 s while running |
+| Batch | The source face, plus every clip before it is processed |
+
+Flagged material is refused with no output. **The gate is fail-closed**: if the checker cannot run, processing is blocked rather than continuing unchecked — matching the native app's behaviour. The model is cached by the service worker so this still holds offline. Thresholds are conservative: `Porn`/`Hentai` ≥ 0.50, `Sexy` ≥ 0.90, or combined ≥ 0.70. Classification happens entirely on-device; nothing is uploaded.
+
+**This is a good-faith guardrail, not a security boundary.** Any check that runs on the user's device can be removed by someone determined, and the classifier has genuine false negatives and false positives. The real protection is the licence and the consent norm below.
+
 ## Content policy
 
 **Do not use this on real people without their consent.** That is the main way software of this kind causes harm, and it is prohibited by the upstream licence.

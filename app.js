@@ -66,6 +66,11 @@ const I18N = {
     cameraTitle: 'Camera', capture: 'Capture', cancel2: 'Cancel',
     tabSwap: 'Swap', tabLive: 'Live', tabBatch: 'Batch', tabSettings: 'Settings',
     modelsReady: 'Models ready!', allLocal: 'All AI running locally.',
+    gateName: 'Content checker', gateDesc: 'On-device NSFW gate — runs before every swap, fails closed',
+    gateBlocked: 'Blocked by content checker.', gateUnavailable: 'Content checker unavailable — processing blocked.',
+    gateChecking: 'Checking content…', gateReady: 'ready', gateLoading: 'loading…', gateFailed: 'unavailable',
+    contentPolicy: 'Content policy',
+    policyText: 'The on-device content checker runs on every input — source faces, target photos and videos (sampled frames), live camera, batch clips and animator drivers — before any processing. Flagged material is refused with no output. If the checker cannot run, processing is blocked rather than continuing unchecked. Do not use this on real people without their consent.',
     noFaceSrc: 'No face in source.', noFaceTgt: 'No face in target.',
     done: 'Done! Tap Save to download.', processing: 'Processing…',
     saved: 'Saved faces updated.', needSource: 'Pick a source face first.',
@@ -110,6 +115,11 @@ const I18N = {
     cameraTitle: 'Камера', capture: 'Снять', cancel2: 'Отмена',
     tabSwap: 'Замена', tabLive: 'Live', tabBatch: 'Пакет', tabSettings: 'Настройки',
     modelsReady: 'Модели готовы!', allLocal: 'Весь ИИ работает локально.',
+    gateName: 'Проверка контента', gateDesc: 'Локальный NSFW-фильтр — перед каждой заменой, при сбое блокирует',
+    gateBlocked: 'Заблокировано проверкой контента.', gateUnavailable: 'Проверка контента недоступна — обработка заблокирована.',
+    gateChecking: 'Проверка контента…', gateReady: 'готово', gateLoading: 'загрузка…', gateFailed: 'недоступно',
+    contentPolicy: 'Политика контента',
+    policyText: 'Локальная проверка контента выполняется для каждого входа — исходных лиц, целевых фото и видео (выборочные кадры), камеры, пакетных клипов и видео-драйверов — до любой обработки. Отмеченный материал отклоняется без вывода. Если проверка не может выполниться, обработка блокируется. Не используйте на реальных людях без их согласия.',
     noFaceSrc: 'Лицо не найдено в исходнике.', noFaceTgt: 'Лицо не найдено в цели.',
     done: 'Готово! Нажмите «Сохранить».', processing: 'Обработка…',
     saved: 'Сохранённые лица обновлены.', needSource: 'Сначала выберите исходное лицо.',
@@ -154,6 +164,11 @@ const I18N = {
     cameraTitle: '相机', capture: '拍摄', cancel2: '取消',
     tabSwap: '换脸', tabLive: '实时', tabBatch: '批量', tabSettings: '设置',
     modelsReady: '模型已就绪！', allLocal: '所有 AI 均在本机运行。',
+    gateName: '内容检查器', gateDesc: '本机 NSFW 过滤 — 每次换脸前运行，失败即阻止',
+    gateBlocked: '已被内容检查器拦截。', gateUnavailable: '内容检查器不可用 — 处理已阻止。',
+    gateChecking: '正在检查内容…', gateReady: '就绪', gateLoading: '加载中…', gateFailed: '不可用',
+    contentPolicy: '内容政策',
+    policyText: '本机内容检查器会在任何处理之前检查每个输入 — 源脸、目标照片和视频（抽样帧）、实时摄像头、批量片段和驱动视频。被标记的素材将被拒绝且不产生输出。如果检查器无法运行，将阻止处理而不是跳过检查。未经本人同意，请勿用于真实人物。',
     noFaceSrc: '源图中未检测到脸。', noFaceTgt: '目标图中未检测到脸。',
     done: '完成！点「保存」下载。', processing: '处理中…',
     saved: '已保存的脸已更新。', needSource: '请先选择源脸。',
@@ -198,6 +213,11 @@ const I18N = {
     cameraTitle: '相機', capture: '拍攝', cancel2: '取消',
     tabSwap: '換臉', tabLive: '即時', tabBatch: '批次', tabSettings: '設定',
     modelsReady: '模型已就緒！', allLocal: '所有 AI 均在本機執行。',
+    gateName: '內容檢查器', gateDesc: '本機 NSFW 過濾 — 每次換臉前執行，失敗即阻擋',
+    gateBlocked: '已被內容檢查器攔截。', gateUnavailable: '內容檢查器無法使用 — 處理已阻擋。',
+    gateChecking: '正在檢查內容…', gateReady: '就緒', gateLoading: '載入中…', gateFailed: '無法使用',
+    contentPolicy: '內容政策',
+    policyText: '本機內容檢查器會在任何處理之前檢查每個輸入 — 源臉、目標照片和影片（抽樣影格）、即時攝影機、批次片段和驅動影片。被標記的素材將被拒絕且不產生輸出。如果檢查器無法執行，將阻擋處理而非略過檢查。未經本人同意，請勿用於真實人物。',
     noFaceSrc: '源圖中未偵測到臉。', noFaceTgt: '目標圖中未偵測到臉。',
     done: '完成！點「儲存」下載。', processing: '處理中…',
     saved: '已儲存的臉已更新。', needSource: '請先選擇源臉。',
@@ -317,6 +337,171 @@ async function loadModels() {
 }
 $('dlModelsBtn').onclick = async () => { $('dlModelsBtn').disabled = true; await loadModels(); $('dlModelsBtn').disabled = false; };
 
+/* ---------- content checker (on-device NSFW gate, fail-closed) ----------
+   Mirrors the native app's content checker: every input is classified before
+   any processing; flagged material is refused with no output; and if the
+   checker cannot run, processing is BLOCKED rather than continuing unchecked.
+   Runs fully on-device (TensorFlow.js) — nothing is uploaded.
+   This is a good-faith guardrail, not a security boundary: any client-side
+   check is removable by a determined user, and the classifier has real false
+   negatives. The licence and consent norms are the actual protection.        */
+const GATE_MODEL_URL = 'https://cdn.jsdelivr.net/gh/infinitered/nsfwjs@v4.4.0/models/mobilenet_v2/';
+const GATE = {
+  model: null,
+  state: 'idle',        // idle | loading | ready | failed
+  canvas: null,
+  frames: 8,            // frames sampled across a video's trim range
+  liveEvery: 1500,      // ms between live-camera re-checks
+  liveAt: 0,
+  // conservative: explicit classes gate hard, merely suggestive must be high
+  th: { Porn: 0.50, Hentai: 0.50, Sexy: 0.90, combined: 0.70 },
+  cache: new Map(),
+};
+
+function setGateBadge() {
+  const b = $('gateBadge'); if (!b) return;
+  if (GATE.state === 'ready') { b.textContent = '✓'; b.className = 'badge green'; return; }
+  if (GATE.state === 'failed') { b.textContent = t('gateFailed'); b.className = 'badge red'; return; }
+  b.textContent = t('gateLoading'); b.className = 'badge gray';
+}
+
+async function loadGate() {
+  if (GATE.state === 'ready') return true;
+  if (GATE.state === 'loading') {
+    while (GATE.state === 'loading') await new Promise(r => setTimeout(r, 120));
+    return GATE.state === 'ready';
+  }
+  if (typeof nsfwjs === 'undefined') {
+    GATE.state = 'failed'; setGateBadge(); log('Content checker: library unavailable'); return false;
+  }
+  GATE.state = 'loading'; setGateBadge();
+  try {
+    GATE.model = await nsfwjs.load(GATE_MODEL_URL, { size: 224 });
+    GATE.state = 'ready'; setGateBadge(); log('Content checker ready');
+    return true;
+  } catch (e) {
+    GATE.state = 'failed'; GATE.model = null; setGateBadge();
+    log('Content checker failed to load: ' + e.message);
+    return false;
+  }
+}
+
+function gateCanvas() {
+  if (!GATE.canvas) { const c = document.createElement('canvas'); c.width = 224; c.height = 224; GATE.canvas = c; }
+  return GATE.canvas;
+}
+
+/* classify one still (image, video frame or canvas) -> {Porn, Sexy, …} */
+async function gateScores(el) {
+  if (!GATE.model) return null;
+  const c = gateCanvas(), ctx = c.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 224, 224);
+  try { ctx.drawImage(el, 0, 0, 224, 224); } catch { return null; }
+  try {
+    const preds = await GATE.model.classify(c, 5);
+    const o = {}; for (const p of preds) o[p.className] = p.probability;
+    return o;
+  } catch (e) { log('Content check error: ' + e.message); return null; }
+}
+
+function gateDecide(s) {
+  if (!s) return { blocked: true, label: 'unreadable', score: 1 };   // fail closed
+  for (const k of ['Porn', 'Hentai', 'Sexy']) {
+    if ((s[k] || 0) >= GATE.th[k]) return { blocked: true, label: k, score: s[k] };
+  }
+  const sum = (s.Porn || 0) + (s.Hentai || 0) + (s.Sexy || 0);
+  if (sum >= GATE.th.combined) return { blocked: true, label: 'Explicit', score: sum };
+  return { blocked: false, label: 'Neutral', score: sum };
+}
+
+/* sample frames across a video's trim range; first flagged frame blocks */
+async function gateCheckVideo(v, t0, t1) {
+  const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+  const a = Math.max(0, t0 || 0);
+  const b = (t1 && t1 > a) ? Math.min(t1, dur || t1) : (dur || a + 1);
+  const n = Math.max(2, Math.min(GATE.frames, Math.ceil((b - a) * 2) || 2));
+  const was = v.currentTime;
+  let worst = { blocked: false, label: 'Neutral', score: 0 };
+  for (let i = 0; i < n; i++) {
+    const time = a + ((b - a) * i) / Math.max(1, n - 1);
+    try { await seekVideo(v, time); } catch { }
+    const d = gateDecide(await gateScores(v));
+    if (d.blocked) { try { await seekVideo(v, was); } catch { } return d; }
+    if (d.score > worst.score) worst = d;
+  }
+  try { await seekVideo(v, was); } catch { }
+  return worst;
+}
+
+function gateKey(el, suffix) {
+  if (!el) return 'none';
+  const src = el.currentSrc || el.src || '';
+  const dim = (el.naturalWidth || el.videoWidth || el.width || 0) + 'x' + (el.naturalHeight || el.videoHeight || el.height || 0);
+  return src.length + ':' + src.slice(-96) + ':' + dim + (suffix || '');
+}
+function gateRemember(key, verdict) {
+  GATE.cache.set(key, verdict);
+  if (GATE.cache.size > 64) GATE.cache.delete(GATE.cache.keys().next().value);
+}
+
+async function gateVerdict(el, kind, t0, t1, fresh) {
+  // live camera frames must never be cached — the scene changes continuously
+  if (fresh) return gateDecide(await gateScores(el));
+  const key = gateKey(el, kind === 'video' ? `:${t0 || 0}-${t1 || 0}` : '');
+  const hit = GATE.cache.get(key);
+  if (hit) return hit;
+  const v = kind === 'video' ? await gateCheckVideo(el, t0, t1) : gateDecide(await gateScores(el));
+  gateRemember(key, v);
+  return v;
+}
+
+/* input-time screening: best effort. If the checker is not available we still
+   let the file in — the hard, fail-closed block happens before processing. */
+async function gateScreenInput(el, kind, what) {
+  if (!(await loadGate())) { log(`Content check skipped at input (${what}): checker unavailable`); return true; }
+  const v = await gateVerdict(el, kind);
+  if (v.blocked) {
+    toast(t('gateBlocked'));
+    log(`BLOCKED at input (${what}): ${v.label} ${(v.score * 100).toFixed(0)}%`);
+    return false;
+  }
+  return true;
+}
+
+/* processing-time gate: fail-closed. Every path runs through this. */
+async function gateAllow(opts = {}) {
+  const st = $('status');
+  const fail = msg => {
+    toast(msg);
+    if (st) { st.textContent = msg; st.style.color = 'var(--red)'; }
+    return false;
+  };
+  if (!(await loadGate())) { log('BLOCKED: content checker unavailable'); return fail(t('gateUnavailable')); }
+
+  const items = [];
+  if (opts.source && S.activeSrc >= 0) items.push({ el: S.sources[S.activeSrc].img, kind: 'image', what: 'source' });
+  if (opts.target && S.target) items.push({ el: S.target, kind: S.targetKind, what: 'target' });
+  if (opts.driver && S.driver) items.push({ el: S.driver, kind: 'video', what: 'driver' });
+  for (const ex of (opts.extra || [])) items.push(ex);
+
+  const prev = st ? st.textContent : '';
+  if (st) { st.textContent = t('gateChecking'); st.style.color = ''; }
+  for (const it of items) {
+    const v = await gateVerdict(it.el, it.kind, opts.t0, opts.t1, it.fresh);
+    if (v.blocked) {
+      log(`BLOCKED (${it.what}): ${v.label} ${(v.score * 100).toFixed(0)}%`);
+      return fail(t('gateBlocked'));
+    }
+  }
+  if (st) { st.textContent = prev; st.style.color = ''; }
+  return true;
+}
+function trimRange() {
+  const t0 = +$('trimStart').value || 0;
+  const t1 = (+$('trimEnd').value || 0) > 0 ? +$('trimEnd').value : 0;
+  return { t0, t1 };
+}
+
 /* ---------- device info ---------- */
 function webglRenderer() {
   try {
@@ -397,6 +582,7 @@ function renderSrcRow() {
 async function addSource(file) {
   try {
     const img = await fileToImage(file);
+    if (!await gateScreenInput(img, 'image', 'source')) return;
     S.sources.push({ img, thumb: cropThumb(img, { x: 0, y: 0, width: img.width, height: img.height }), name: file.name.slice(0, 14) });
     S.activeSrc = S.sources.length - 1;
     log('Source added: ' + file.name);
@@ -450,10 +636,15 @@ async function setTarget(file) {
     v.src = url; v.classList.remove('hidden'); $('tgtPreview').classList.add('hidden');
     $('tgtStage').classList.remove('hidden');
     await new Promise(r => { v.onloadedmetadata = r; });
+    if (!await gateScreenInput(v, 'video', 'target')) {
+      v.src = ''; v.classList.add('hidden'); $('tgtStage').classList.add('hidden');
+      URL.revokeObjectURL(url); return;
+    }
     S.target = v; S.targetKind = 'video'; S.targetName = file.name;
     log('Target video: ' + file.name + ' ' + v.videoWidth + '×' + v.videoHeight);
   } else {
     const img = await fileToImage(file);
+    if (!await gateScreenInput(img, 'image', 'target')) return;
     S.target = img; S.targetKind = 'image'; S.targetName = file.name;
     $('tgtPreview').src = img.src; $('tgtPreview').classList.remove('hidden');
     $('tgtVideo').classList.add('hidden');
@@ -1041,11 +1232,16 @@ async function swapVideo() {
   } catch (e) { st.textContent = e.message; st.style.color = 'var(--red)'; log('Video swap failed: ' + e.message); }
   finally { $('cancelBtn').classList.add('hidden'); }
 }
-$('swapBtn').onclick = () => {
+$('swapBtn').onclick = async () => {
   if (!S.modelsReady) { toast(t('needModels')); return; }
   if (S.activeSrc < 0) { toast(t('needSource')); return; }
   if (!S.target) { toast(t('needTarget')); return; }
-  S.targetKind === 'video' ? swapVideo() : swapPhoto();
+  const { t0, t1 } = trimRange();
+  $('swapBtn').disabled = true;
+  try {
+    if (!await gateAllow({ source: true, target: true, t0, t1 })) return;
+    await (S.targetKind === 'video' ? swapVideo() : swapPhoto());
+  } finally { checkReady(); }
 };
 $('cancelBtn').onclick = () => { S.cancelled = true; };
 
@@ -1053,6 +1249,8 @@ $('cancelBtn').onclick = () => { S.cancelled = true; };
 let livePlay = { on: false, raf: 0, canvas: null };
 $('playLiveBtn').onclick = async () => {
   if (livePlay.on) { stopLivePlay(); return; }
+  const { t0, t1 } = trimRange();
+  if (!await gateAllow({ source: true, target: true, t0, t1 })) return;
   const v = $('tgtVideo');
   if (!livePlay.canvas) {
     livePlay.canvas = document.createElement('canvas');
@@ -1092,16 +1290,23 @@ function stopLivePlay() {
 
 /* ---------- animator ---------- */
 $('animatorBtn').onclick = () => openSheet('sheet-animator');
-$('driverFile').onchange = e => {
+$('driverFile').onchange = async e => {
   if (!e.target.files[0]) return;
   const url = URL.createObjectURL(e.target.files[0]);
-  $('driverPreview').src = url; $('driverPreview').classList.add('show');
-  S.driver = $('driverPreview');
+  const dp = $('driverPreview');
+  dp.src = url; dp.classList.add('show');
+  await new Promise(r => { dp.onloadedmetadata = r; setTimeout(r, 4000); });
+  if (!await gateScreenInput(dp, 'video', 'driver')) {
+    dp.src = ''; dp.classList.remove('show'); S.driver = null;
+    URL.revokeObjectURL(url); checkReady(); return;
+  }
+  S.driver = dp;
   checkReady();
 };
 $('animateBtn').onclick = async () => {
   if (!S.driver) { toast(t('needDriver')); return; }
   if (!S.target || S.targetKind !== 'image') { toast(t('needTarget')); return; }
+  if (!await gateAllow({ target: true, driver: true })) return;
   const st = $('status');
   S.cancelled = false; $('cancelBtn').classList.remove('hidden');
   try {
@@ -1235,6 +1440,13 @@ $('liveStartBtn').onclick = async () => {
     });
     liveVideo.srcObject = S.live.stream;
     await liveVideo.play();
+    // gate the source face and the first camera frame before any swapping starts
+    const okLive = await gateAllow({ source: true, extra: [{ el: liveVideo, kind: 'image', what: 'camera', fresh: true }] });
+    if (!okLive) {
+      S.live.stream.getTracks().forEach(tr => tr.stop()); S.live.stream = null;
+      liveVideo.srcObject = null; return;
+    }
+    GATE.liveAt = performance.now();
     S.live.on = true;
     $('liveStartBtn').textContent = '⏹ Stop';
     $('liveBadge').textContent = 'on'; $('liveBadge').className = 'badge green';
@@ -1260,6 +1472,16 @@ $('flipBtn').onclick = () => {
 let liveLastDetect = 0, liveFaces = [];
 async function liveLoop() {
   if (!S.live.on) return;
+  // periodic re-check: the camera scene changes, so one check at start is not enough
+  if (GATE.state === 'ready' && performance.now() - GATE.liveAt > GATE.liveEvery) {
+    GATE.liveAt = performance.now();
+    const v = gateDecide(await gateScores(liveVideo));
+    if (v.blocked) {
+      log(`BLOCKED (live): ${v.label} ${(v.score * 100).toFixed(0)}%`);
+      toast(t('gateBlocked')); stopLive(); return;
+    }
+    if (!S.live.on) return;
+  }
   const low = localStorage.getItem('ffm_lowmem') === '1';
   const cap = low ? 320 : 480;
   const scale = Math.min(1, cap / Math.max(liveVideo.videoWidth || 640, liveVideo.videoHeight || 480));
@@ -1381,6 +1603,8 @@ $('batchFile').onchange = async e => {
 };
 $('batchRunBtn').onclick = async () => {
   if (S.activeSrc < 0) { toast(t('needSource')); return; }
+  $('batchStatus').textContent = t('gateChecking');
+  if (!await gateAllow({ source: true })) { $('batchStatus').textContent = t('gateBlocked'); return; }
   S.cancelled = false;
   for (const item of S.batch) {
     if (S.cancelled) break;
@@ -1389,6 +1613,13 @@ $('batchRunBtn').onclick = async () => {
       const v = document.createElement('video');
       v.src = item.url; v.muted = true; v.playsInline = true;
       await new Promise(r => { v.onloadedmetadata = r; });
+      // every clip is checked before it is processed
+      const verdict = await gateVerdict(v, 'video');
+      if (verdict.blocked) {
+        item.status = t('gateBlocked'); renderBatchList();
+        log(`BLOCKED (batch ${item.name}): ${verdict.label} ${(verdict.score * 100).toFixed(0)}%`);
+        continue;
+      }
       const { frames, fps, W, H } = await processVideoFrames(v, null, null);
       const blob = await encodeFrames(frames, fps, W, H);
       item.blob = blob; item.status = t('finished');
@@ -1428,10 +1659,17 @@ renderModelList();
 renderDeviceInfo();
 log('FaceFusion Mobile booted');
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+setGateBadge();
 window.addEventListener('load', () => {
   if (typeof faceapi !== 'undefined') loadModels();
   else {
     const c = setInterval(() => { if (typeof faceapi !== 'undefined') { clearInterval(c); loadModels(); } }, 200);
     setTimeout(() => clearInterval(c), 15000);
+  }
+  // warm the content checker in the background so the first swap isn't delayed
+  if (typeof nsfwjs !== 'undefined') loadGate();
+  else {
+    const g = setInterval(() => { if (typeof nsfwjs !== 'undefined') { clearInterval(g); loadGate(); } }, 200);
+    setTimeout(() => { clearInterval(g); if (GATE.state === 'idle') { GATE.state = 'failed'; setGateBadge(); log('Content checker: library did not load'); } }, 15000);
   }
 });

@@ -176,11 +176,17 @@
   <div class="card">
     <h3 data-i18n="models">Models</h3>
     <div id="modelList"></div>
+    <div class="model-row"><span class="nm"><span data-i18n="gateName">Content checker</span><small data-i18n="gateDesc">On-device NSFW gate — runs before every swap, fails closed</small></span><span class="badge gray" id="gateBadge">…</span></div>
     <div class="set-row"><span class="lbl" data-i18n="dlSource">Download from</span>
       <select id="dlSourceSel"><option value="hf">Hugging Face (CDN)</option><option value="mirror">hf-mirror.com</option></select>
     </div>
     <button class="btn" id="dlModelsBtn" style="width:100%;margin-top:10px" data-i18n="downloadModels">Download models</button>
     <p class="small" style="margin-top:8px" data-i18n="modelNote">Web build: face-api models load from CDN and are cached for offline use. The native app downloads ~420 MB of NPU models from Hugging Face with SHA256 checks.</p>
+  </div>
+
+  <div class="card">
+    <h3 data-i18n="contentPolicy">Content policy</h3>
+    <p class="muted small" data-i18n="policyText">The on-device content checker runs on every input — source faces, target photos and videos (sampled frames), live camera, batch clips and animator drivers — before any processing. Flagged material is refused with no output. If the checker cannot run, processing is blocked rather than continuing unchecked. Do not use this on real people without their consent.</p>
   </div>
 
   <div class="card">
