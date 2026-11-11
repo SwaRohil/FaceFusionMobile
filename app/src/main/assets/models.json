@@ -1,0 +1,86 @@
+{
+  "manifest_version": 3,
+  "updated_at": "2026-11-11",
+  "note": "All weights are downloaded on demand; nothing is bundled in the APK. Sizes are the exact byte sizes of the upstream release assets (rounded to the nearest MB) and are used both for the storage pre-flight check and for truncation detection. Fill in \"sha256\" (or \"crc32\") for a model to enable strong integrity verification; when both are empty the downloader verifies the byte count only.",
+  "models": [
+    {
+      "id": "face_landmarker",
+      "name": "Face Landmarker (478 pt mesh + 52 blendshapes)",
+      "file_name": "face_landmarker.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      "size_mb": 4,
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "version": "1.0.0",
+      "required": true,
+      "description": "MediaPipe Tasks Face Landmarker, float16. Gives 478 landmarks (468 mesh + 10 iris), 52 ARKit style blendshapes and a 4x4 facial transformation matrix. This is the backbone of pose, expression and occlusion aware swapping."
+    },
+    {
+      "id": "face_detector",
+      "name": "SCRFD det_10g + ArcFace r50 (buffalo_l pack)",
+      "file_name": "buffalo_l.zip",
+      "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
+      "size_mb": 276,
+      "sha256": "",
+      "version": "1.0.0",
+      "required": true,
+      "archive": true,
+      "unpacked": ["buffalo_l/det_10g.onnx", "buffalo_l/w600k_r50.onnx"],
+      "description": "InsightFace buffalo_l pack. det_10g.onnx is SCRFD-10GF (multi face boxes + confidence + 5 points), w600k_r50.onnx is the ArcFace R50 recogniser used for source embeddings and the identity score."
+    },
+    {
+      "id": "face_swap",
+      "name": "inswapper_128_fp16 (identity transfer)",
+      "file_name": "inswapper_128_fp16.onnx",
+      "url": "https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/inswapper_128_fp16.onnx",
+      "size_mb": 265,
+      "sha256": "",
+      "version": "3.0.0",
+      "required": true,
+      "description": "The 128x128 face swapper, float16 build (half the size/bandwidth of the fp32 model, identical output). Needs the source ArcFace embedding as its second input."
+    },
+    {
+      "id": "face_parser",
+      "name": "BiSeNet face parser (occlusion / region masks)",
+      "file_name": "bisenet_resnet_34.onnx",
+      "url": "https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/bisenet_resnet_34.onnx",
+      "size_mb": 89,
+      "sha256": "",
+      "version": "3.0.0",
+      "required": true,
+      "description": "19 class CelebAMask-HQ parser at 512x512. Used to keep hair, glasses, hands and beards on top of the swapped skin and to restrict the colour transfer to skin only."
+    },
+    {
+      "id": "face_enhancer",
+      "name": "GFPGAN v1.4 (hyper realistic detail)",
+      "file_name": "gfpgan_1.4.onnx",
+      "url": "https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/gfpgan_1.4.onnx",
+      "size_mb": 332,
+      "sha256": "",
+      "version": "3.0.0",
+      "required": true,
+      "description": "512x512 face restoration with an optional fidelity weight input (0..1). We drive it from the Hyper Realistic slider so pores and wrinkles survive instead of being smoothed away."
+    },
+    {
+      "id": "frame_enhancer",
+      "name": "Real-ESRGAN x2 fp16 (background / output upscale)",
+      "file_name": "real_esrgan_x2_fp16.onnx",
+      "url": "https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/real_esrgan_x2_fp16.onnx",
+      "size_mb": 35,
+      "sha256": "",
+      "version": "3.0.0",
+      "required": false,
+      "description": "Tiled 2x super resolution used for the 512/1024/4K export path and to match grain and micro detail of the background when the swap is upscaled."
+    },
+    {
+      "id": "content_analyser",
+      "name": "NSFW content analyser",
+      "file_name": "open_nsfw.onnx",
+      "url": "https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/open_nsfw.onnx",
+      "size_mb": 23,
+      "sha256": "",
+      "version": "3.0.0",
+      "required": false,
+      "description": "Yahoo open_nsfw at 224x224. Blocks explicit source or target images before any processing happens (safety requirement)."
+    }
+  ]
+}

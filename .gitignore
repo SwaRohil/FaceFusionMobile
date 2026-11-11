@@ -1,0 +1,22 @@
+# Gradle / Android Studio
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+
+# Signing
+*.jks
+*.keystore
+
+# Never commit model weights
+*.onnx
+*.task
+app/libs/*.aar
+
+# OS
+.DS_Store

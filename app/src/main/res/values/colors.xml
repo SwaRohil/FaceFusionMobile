@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="studio_background">#FF07070A</color>
+    <color name="studio_surface">#FF121218</color>
+    <color name="studio_accent">#FF00E5C0</color>
+    <color name="ic_launcher_background">#FF0B0B10</color>
+</resources>

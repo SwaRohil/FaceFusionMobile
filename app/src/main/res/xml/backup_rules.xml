@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nothing is backed up: the app stores only user media paths, model weights and preferences. -->
+<full-backup-content>
+    <exclude
+        domain="file"
+        path="models/" />
+</full-backup-content>
