@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Exports written to cache before they are copied into MediaStore -->
+    <cache-path
+        name="swap_cache"
+        path="." />
+    <files-path
+        name="swap_files"
+        path="." />
+</paths>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SwapStudio AI</string>
+    <string name="app_tagline">HYPER REALISTIC IMAGE &amp; VIDEO FACE SWAP</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Home</string>
+    <string name="nav_models">Models</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Notifications -->
+    <string name="channel_processing">Processing</string>
+    <string name="channel_downloads">Model downloads</string>
+    <string name="channel_saved">Saved exports</string>
+    <string name="notif_processing_title">Swapping faces</string>
+    <string name="notif_download_title">Downloading models</string>
+    <string name="notif_download_text">%1$d active - %2$.0f %% - %3$.1f MB/s</string>
+    <string name="notif_saved_title">%1$s saved</string>
+    <string name="notif_saved_text">Tap to open your export in the gallery</string>
+    <string name="notif_processing_text">Swapping on this device - nothing is uploaded</string>
+    <string name="notif_models_ready_title">Models ready</string>
+    <string name="notif_models_ready_text">%1$d of %2$d installed</string>
+    <string name="notif_cancel">Cancel</string>
+
+    <!-- Safety -->
+    <string name="consent_title">Consent required</string>
+    <string name="ai_generated_label">AI Generated</string>
+</resources>
