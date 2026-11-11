@@ -105,11 +105,23 @@ class SettingsRepository @Inject constructor(
     suspend fun setCopyAudio(value: Boolean) = put { it[Keys.COPY_AUDIO] = value }
     suspend fun setGrainMatch(value: Boolean) = put { it[Keys.GRAIN] = value }
     suspend fun setWifiOnly(value: Boolean) = put { it[Keys.WIFI_ONLY] = value }
+    // `MutablePreferences.remove(key)` is the DataStore overload; importing kotlin.collections'
+    // `remove(index)` next to it is what produced the deprecation warning, so the calls are written
+    // out explicitly through the preferences receiver.
     suspend fun setLastSource(uri: String?) = put { prefs ->
-        if (uri == null) prefs.remove(Keys.LAST_SOURCE) else prefs[Keys.LAST_SOURCE] = uri
+        if (uri == null) {
+            prefs.remove(Keys.LAST_SOURCE)
+        } else {
+            prefs[Keys.LAST_SOURCE] = uri
+        }
     }
+
     suspend fun setLastTarget(uri: String?) = put { prefs ->
-        if (uri == null) prefs.remove(Keys.LAST_TARGET) else prefs[Keys.LAST_TARGET] = uri
+        if (uri == null) {
+            prefs.remove(Keys.LAST_TARGET)
+        } else {
+            prefs[Keys.LAST_TARGET] = uri
+        }
     }
 
     /** Wipes every preference (used by "reset app" in the settings screen). */

@@ -202,6 +202,73 @@ print(f"   ok    {len(entries)} models, {required_mb} MB required / {total_mb} M
 if unpinned:
     print("   note  verified by byte count only (no sha256/crc32): " + ", ".join(unpinned))
 
+# ---- structural sanity: balanced braces / parens / comments ----------------------------------
+# Kotlin has no preprocessor, so an unbalanced `{`, `(` or an unterminated `/* */` in a KDoc comment
+# silently swallows the rest of the file and the error surfaces hundreds of lines away. Doing this
+# here costs milliseconds and has caught exactly that bug.
+unbalanced = []
+for kt in sorted((root / "app/src").rglob("*.kt")):
+    text = kt.read_text(encoding="utf-8", errors="replace")
+    depth = {"{": 0, "(": 0}
+    pairs = {"}": "{", ")": "("}
+    i, n = 0, len(text)
+    in_block_comment = False
+    in_line_comment = False
+    in_string = False
+    in_raw = False
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if in_line_comment:
+            if ch == "\n":
+                in_line_comment = False
+        elif in_block_comment:
+            if ch == "*" and nxt == "/":
+                in_block_comment = False
+                i += 1
+            elif ch == "/" and nxt == "*":
+                kt_note = "nested block comment"
+        elif in_string:
+            if ch == "\\":
+                i += 1
+            elif ch == '"':
+                in_string = False
+        elif in_raw:
+            if ch == '"' and text[i:i + 3] == '\"\"\"':
+                in_raw = False
+                i += 2
+        else:
+            if ch == "/" and nxt == "/":
+                in_line_comment = True
+                i += 1
+            elif ch == "/" and nxt == "*":
+                in_block_comment = True
+                i += 1
+            elif text[i:i + 3] == '\"\"\"':
+                in_raw = True
+                i += 2
+            elif ch == '"':
+                in_string = True
+            elif ch in depth:
+                depth[ch] += 1
+            elif ch in pairs:
+                depth[pairs[ch]] -= 1
+                if depth[pairs[ch]] < 0:
+                    unbalanced.append(f"{kt.relative_to(root)}: unmatched '{ch}'")
+                    break
+        i += 1
+    if in_block_comment:
+        unbalanced.append(f"{kt.relative_to(root)}: unterminated /* comment")
+    if in_string:
+        unbalanced.append(f"{kt.relative_to(root)}: unterminated string literal")
+    for opener, count in depth.items():
+        if count != 0:
+            unbalanced.append(f"{kt.relative_to(root)}: {count:+d} unbalanced '{opener}'")
+if unbalanced:
+    failures.extend(unbalanced)
+else:
+    print(f"   ok    balanced braces/parens/comments in {len(list((root / 'app/src').rglob('*.kt')))} Kotlin files")
+
 # ---- no template leftovers -------------------------------------------------------------------
 bad = []
 for kt in (root / "app/src/main/java").rglob("*.kt"):

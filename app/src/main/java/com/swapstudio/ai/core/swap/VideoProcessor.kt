@@ -2,6 +2,8 @@ package com.swapstudio.ai.core.swap
 
 import android.content.Context
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
@@ -18,6 +20,8 @@ import com.swapstudio.ai.core.models.ModelManager
 import com.swapstudio.ai.core.processing.ColorMatcher
 import com.swapstudio.ai.core.util.BitmapUtils
 import com.swapstudio.ai.core.util.MatUtils
+import com.swapstudio.ai.core.util.YuvUtils
+import kotlinx.coroutines.CancellationException
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -132,6 +136,16 @@ class VideoProcessor @Inject constructor(
         output.parentFile?.mkdirs()
         if (output.exists()) output.delete()
 
+        // Declared up here so the outer `finally` can always tear them down, including when
+        // configure() throws halfway through or the user cancels mid-render.
+        var decoder: MediaCodec? = null
+        var encoder: MediaCodec? = null
+        var muxer: MediaMuxer? = null
+        var extractor: MediaExtractor? = null
+        var completed = false
+        // Updated inside the loop so the cancellation path can report progress.
+        var decodedFramesSoFar = 0
+
         // ---------------------------------------------------------------- source identity
         onProgress(VideoProgress(stage = "Reading the source identity"))
         val sourceRgb = BitmapUtils.bitmapToRgb(sourceBitmap)
@@ -172,6 +186,9 @@ class VideoProcessor @Inject constructor(
             val displayWidth = if (swapDimensions) srcHeight else srcWidth
             val displayHeight = if (swapDimensions) srcWidth else srcHeight
 
+            require(displayWidth > 0 && displayHeight > 0) {
+                "The clip reports ${displayWidth}x$displayHeight; it cannot be decoded"
+            }
             val outHeight = min(options.outputHeight, max(displayHeight, 1080))
             val scale = outHeight.toDouble() / displayHeight
             val outWidth = ((displayWidth * scale) / 2).toInt() * 2 // encoders require even dimensions
@@ -180,82 +197,92 @@ class VideoProcessor @Inject constructor(
             val totalFrames = if (srcDurationUs > 0) max(1, (srcDurationUs / 1_000_000.0 * srcFps).toInt()) else 0
 
             // ------------------------------------------------------------ encoder / muxer
-            val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            val encoderFormat = MediaFormat.createVideoFormat(
-                if (options.hevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC,
-                outWidth,
-                scaledHeight,
-            ).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfoCodec.COLOR_FORMAT_YUV420_PLANAR)
-                setInteger(MediaFormat.KEY_BIT_RATE, options.bitrate)
-                setInteger(MediaFormat.KEY_FRAME_RATE, srcFps.toInt().coerceAtLeast(24))
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-                setInteger(MediaFormat.KEY_PROFILE, if (options.hevc) 1 else 8) // HEVC Main / AVC High
-                setInteger(MediaFormat.KEY_LEVEL, if (options.hevc) 512 else 512)
-                if (!options.hevc) setInteger(MediaFormat.KEY_BITRATE_MODE, 2) // VBR
-                if (srcRotation != 0) setInteger("rotation-degrees", srcRotation)
-            }
-            val encoder = MediaCodec.createEncoderByType(encoderFormat.getString(MediaFormat.KEY_MIME)!!)
-            encoder.configure(encoderFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            encoder.start()
-
+            //
+            // The muxer only learns its tracks once the encoder emits its real output format (which
+            // can differ from what we asked for: some encoders clamp resolution, and the HEVC profile
+            // may be downgraded). The audio track therefore has to be registered from inside
+            // `drainEncoder`, which needs the *original* track format - a hand rebuilt one loses
+            // `csd-0`/`csd-1` and the muxer then refuses the samples or writes silence.
+            muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            val muxerRef = muxer!!
             var videoTrackIndex = -1
             var audioTrackIndex = -1
             var muxerStarted = false
             var framesEncoded = 0
 
             // ------------------------------------------------------------ decoder
-            val extractor = MediaExtractor()
-            extractor.setDataSource(context, input, null)
-            extractor.selectTrack(videoTrack)
-            val decoderFormat = extractor.getTrackFormat(videoTrack)
-            val decoder = MediaCodec.createDecoderByType(decoderFormat.getString(MediaFormat.KEY_MIME)!!)
-            decoder.configure(decoderFormat, null, null, 0)
-            decoder.start()
+            val extractorRef = MediaExtractor()
+            extractor = extractorRef
+            extractorRef.setDataSource(context, input, null)
+            extractorRef.selectTrack(videoTrack)
+            val decoderFormat = extractorRef.getTrackFormat(videoTrack)
+            val decoderRef = MediaCodec.createDecoderByType(decoderFormat.getString(MediaFormat.KEY_MIME)!!)
+            decoder = decoderRef
+            // Configuring without a surface (third argument null) is what makes the decoder emit
+            // ByteBuffers; with a surface `getOutputImage` returns null and every frame is dropped.
+            // The layout request is only a hint - `decodeFrame` reads the real plane strides.
+            runCatching {
+                decoderFormat.setInteger(
+                    MediaFormat.KEY_COLOR_FORMAT,
+                    MediaCodecInfoCodec.COLOR_FORMAT_YUV420_SEMI_PLANAR,
+                )
+            }
+            decoderRef.configure(decoderFormat, null, null, 0)
+            decoderRef.start()
+
+            val mime = if (options.hevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
+            // Never *request* a colour format the encoder does not advertise: that is an instant
+            // configure() failure on some devices. Ask the codec list instead and adapt the pixel
+            // layout to whatever it supports.
+            val colorFormat = pickColorFormat(mime, outWidth, scaledHeight)
+            val requestedFormat = MediaFormat.createVideoFormat(mime, outWidth, scaledHeight).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat)
+                setInteger(MediaFormat.KEY_BIT_RATE, options.bitrate)
+                setInteger(MediaFormat.KEY_FRAME_RATE, srcFps.toInt().coerceAtLeast(24))
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                if (!options.hevc) setInteger(MediaFormat.KEY_BITRATE_MODE, 2) // VBR
+            }
+            // Rotation is metadata only: if the encoder ignores it (most do) the video would come
+            // out sideways, so the pixels are rotated instead and no metadata is written.
+            val rotatePixels = srcRotation != 0
+            // The profile/level are advisory: several encoders reject an explicit High@5.x request and
+            // fall back to a baseline/main profile, so let them choose and trust the output format.
+            val encoderRef = MediaCodec.createEncoderByType(requestedFormat.getString(MediaFormat.KEY_MIME)!!)
+            encoder = encoderRef
+            encoderRef.configure(requestedFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            encoderRef.start()
 
             val bufferInfo = MediaCodec.BufferInfo()
             var inputDone = false
             var outputDone = false
 
             fun drainEncoder(endOfStream: Boolean): Boolean {
-                if (endOfStream) encoder.signalEndOfInputStream()
+                if (endOfStream) encoderRef.signalEndOfInputStream()
                 var done = false
                 while (!done) {
-                    val status = encoder.dequeueOutputBuffer(bufferInfo, if (endOfStream) 10_000L else 0L)
+                    val status = encoderRef.dequeueOutputBuffer(bufferInfo, if (endOfStream) 10_000L else 0L)
                     when {
                         status == MediaCodec.INFO_TRY_AGAIN_LATER -> if (!endOfStream) done = true
                         status == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                            videoTrackIndex = muxer.addTrack(encoder.outputFormat)
-                            if (audioFormat != null && audioTrackIndex < 0) {
-                                audioTrackIndex = muxer.addTrack(MediaFormat.createAudioFormat(
-                                    audioFormat.getString(MediaFormat.KEY_MIME)!!,
-                                    audioFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE),
-                                    audioFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
-                                ).apply {
-                                    if (audioFormat.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
-                                        setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, audioFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
-                                    }
-                                    audioFormat.getIntegerOrDefault("csd-0", -1).let { if (it >= 0) setInteger("csd-0", it) }
-                                    audioFormat.getIntegerOrDefault("csd-1", -1).let { if (it >= 0) setInteger("csd-1", it) }
-                                    audioFormat.getIntegerOrDefault("channel-mask", -1).let { if (it >= 0) setInteger("channel-mask", it) }
-                                    audioFormat.getIntegerOrDefault(MediaFormat.KEY_BIT_RATE, -1).let { if (it > 0) setInteger(MediaFormat.KEY_BIT_RATE, it) }
-                                })
+                            videoTrackIndex = muxerRef.addTrack(encoderRef.outputFormat)
+                            if (audioFormat != null && options.copyAudio && audioTrackIndex < 0) {
+                                audioTrackIndex = muxerRef.addTrack(audioFormat)
                             }
-                            muxer.start()
+                            muxerRef.start()
                             muxerStarted = true
                         }
                         status >= 0 -> {
-                            val encoded = encoder.getOutputBuffer(status) ?: error("encoder buffer null")
+                            val encoded = encoderRef.getOutputBuffer(status) ?: error("encoder buffer null")
                             if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
                                 bufferInfo.size = 0
                             }
                             if (bufferInfo.size > 0 && muxerStarted) {
                                 encoded.position(bufferInfo.offset)
                                 encoded.limit(bufferInfo.offset + bufferInfo.size)
-                                muxer.writeSampleData(videoTrackIndex, encoded, bufferInfo)
+                                muxerRef.writeSampleData(videoTrackIndex, encoded, bufferInfo)
                                 framesEncoded++
                             }
-                            encoder.releaseOutputBuffer(status, false)
+                            encoderRef.releaseOutputBuffer(status, false)
                             if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                                 done = true
                             } else if (!endOfStream) {
@@ -270,6 +297,9 @@ class VideoProcessor @Inject constructor(
             currentCoroutineContext().ensureActive()
             var decodedFrames = 0
             var lastProgressEmit = 0L
+            // Presentation time of the first emitted frame: the output timeline starts at 0 so a
+            // trimmed clip and a clip that starts at a non-zero PTS both play correctly.
+            var firstPresentationUs = -1L
             val startUs = options.startMs * 1000
             val endUs = if (options.endMs == Long.MAX_VALUE) Long.MAX_VALUE else options.endMs * 1000
 
@@ -277,58 +307,69 @@ class VideoProcessor @Inject constructor(
                 currentCoroutineContext().ensureActive()
                 // ---- feed the decoder -------------------------------------------------------
                 if (!inputDone) {
-                    val index = decoder.dequeueInputBuffer(10_000)
+                    val index = decoderRef.dequeueInputBuffer(10_000)
                     if (index >= 0) {
-                        val buffer = decoder.getInputBuffer(index)!!
-                        val size = extractor.readSampleData(buffer, 0)
-                        val time = extractor.sampleTime
+                        val buffer = decoderRef.getInputBuffer(index)!!
+                        val size = extractorRef.readSampleData(buffer, 0)
+                        val time = extractorRef.sampleTime
                         if (size < 0 || time > endUs) {
-                            decoder.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            decoderRef.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             inputDone = true
                         } else {
-                            decoder.queueInputBuffer(index, 0, size, time, 0)
-                            extractor.advance()
+                            decoderRef.queueInputBuffer(index, 0, size, time, 0)
+                            extractorRef.advance()
                         }
                     }
                 }
 
                 // ---- read a decoded frame ---------------------------------------------------
-                val outIndex = decoder.dequeueOutputBuffer(bufferInfo, 10_000)
+                val outIndex = decoderRef.dequeueOutputBuffer(bufferInfo, 10_000)
                 if (outIndex >= 0) {
                     val endOfStream = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     val presentationUs = bufferInfo.presentationTimeUs
                     if (bufferInfo.size > 0 && presentationUs >= startUs) {
-                        // The output image is only valid until releaseOutputBuffer, so the decode and
-                        // the YUV -> ARGB conversion happen first, then the buffer is handed back.
-                        val bitmap = decodeFrame(decoder, outIndex, bufferInfo, srcWidth, srcHeight)
-                        decoder.releaseOutputBuffer(outIndex, false)
+                        if (firstPresentationUs < 0) firstPresentationUs = presentationUs
+                        // The YUV -> RGB copy has to happen before the buffer is handed back.
+                        val bitmap = decodeFrame(decoderRef, outIndex, bufferInfo, srcWidth, srcHeight)
+                        decoderRef.releaseOutputBuffer(outIndex, false)
                         if (bitmap != null) {
-                            val scaled = if (srcRotation != 0) rotateBitmap(bitmap, srcRotation) else bitmap
+                            val scaled = if (rotatePixels) rotateBitmap(bitmap, srcRotation) else bitmap
                             if (scaled !== bitmap) bitmap.recycle()
 
-                            val processed = processFrame(
-                                frameBitmap = scaled,
-                                scaledWidth = outWidth,
-                                scaledHeight = scaledHeight,
-                                options = options,
-                                spec = spec,
-                                pipeline = pipeline,
-                                stabilizer = stabilizer,
-                                blendshapeEma = blendshapeEma,
-                                colorMatcher = colorMatcher,
-                                warnings = warnings,
-                            )
-                            scaled.recycle()
+                            val processed = try {
+                                processFrame(
+                                    frameBitmap = scaled,
+                                    scaledWidth = outWidth,
+                                    scaledHeight = scaledHeight,
+                                    options = options,
+                                    spec = spec,
+                                    pipeline = pipeline,
+                                    stabilizer = stabilizer,
+                                    blendshapeEma = blendshapeEma,
+                                    colorMatcher = colorMatcher,
+                                    colorFormat = colorFormat,
+                                    warnings = warnings,
+                                )
+                            } finally {
+                                scaled.recycle()
+                            }
 
-                            // ---- feed the encoder ------------------------------------------------
-                            val inputIndex = encoder.dequeueInputBuffer(10_000)
+                            // ---- feed the encoder --------------------------------------------
+                            val inputIndex = encoderRef.dequeueInputBuffer(20_000)
                             if (inputIndex >= 0) {
-                                val buffer = encoder.getInputBuffer(inputIndex)!!
+                                val buffer = encoderRef.getInputBuffer(inputIndex)!!
                                 buffer.clear()
                                 buffer.put(processed)
-                                encoder.queueInputBuffer(inputIndex, 0, processed.size, presentationUs, 0)
+                                // Monotonic output timeline, independent of the source PTS.
+                                val outUs = (presentationUs - firstPresentationUs).coerceAtLeast(0L)
+                                encoderRef.queueInputBuffer(inputIndex, 0, processed.size, outUs, 0)
+                                decodedFrames++
+                                decodedFramesSoFar = decodedFrames
+                            } else {
+                                // The encoder has no input buffer yet: skip this frame rather than
+                                // blocking the decode loop (which would starve the pipeline).
+                                Log.w(TAG, "encoder input starved, dropping one frame")
                             }
-                            decodedFrames++
                             val now = System.currentTimeMillis()
                             if (now - lastProgressEmit > 120) {
                                 lastProgressEmit = now
@@ -353,30 +394,27 @@ class VideoProcessor @Inject constructor(
                                     ),
                                 )
                             }
+                        } else {
+                            Log.w(TAG, "decoder returned no image for frame $decodedFrames, skipping")
                         }
-                        drainEncoder(endOfStream = false)
                     } else {
-                        decoder.releaseOutputBuffer(outIndex, false)
+                        decoderRef.releaseOutputBuffer(outIndex, false)
                     }
                     if (endOfStream) outputDone = true
                 } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    // decoder output format changed (usually right away); nothing to do.
+                    // decoder output format changed (usually right away); the stride information we
+                    // need comes from each Image, so nothing to do here.
                 }
                 if (outputDone) break
             }
 
             // ---- flush the encoder --------------------------------------------------------
             drainEncoder(endOfStream = true)
-            decoder.stop(); decoder.release()
-            extractor.release()
-            encoder.stop(); encoder.release()
 
             // ---- audio stream copy --------------------------------------------------------
-            if (muxerStarted && audioTrack >= 0 && audioFormat != null && options.copyAudio) {
-                copyAudio(input, muxer, audioTrackIndex, bufferInfo)
+            if (muxerStarted && audioTrackIndex >= 0 && options.copyAudio) {
+                copyAudio(input, muxerRef, audioTrackIndex, bufferInfo, endUs)
             }
-            if (muxerStarted) muxer.stop()
-            muxer.release()
 
             val result = VideoSwapResult(
                 outputFile = output,
@@ -385,7 +423,7 @@ class VideoProcessor @Inject constructor(
                 fps = srcFps,
                 frameCount = framesEncoded,
                 durationMs = if (srcDurationUs > 0) srcDurationUs / 1000 else 0,
-                hasAudio = audioTrack >= 0 && options.copyAudio,
+                hasAudio = audioTrackIndex >= 0 && options.copyAudio,
                 elapsedMs = System.currentTimeMillis() - started,
                 warnings = warnings,
             )
@@ -399,10 +437,44 @@ class VideoProcessor @Inject constructor(
                 ),
             )
             result
+        } catch (cancel: CancellationException) {
+            // The user pressed Cancel: report it as such instead of a cryptic codec exception.
+            Log.i(TAG, "render cancelled after $decodedFramesSoFar frames")
+            throw cancel
         } finally {
+            // Codec teardown is unconditional: a leaked MediaCodec keeps the hardware encoder busy
+            // for the rest of the process lifetime, so the *next* render would fail too.
+            releaseQuietly(decoder, encoder, muxer, extractor)
+            if (!completed) {
+                // Cancelled or failed: never leave a truncated MP4 in the cache where the result
+                // screen (or the gallery save path) could pick it up.
+                runCatching { if (output.exists()) output.delete() }
+            }
             pipeline.close()
             stabilizer.reset()
             blender.release()
+        }
+    }
+
+    /**
+     * Tears down whatever the encode loop opened.
+     *
+     * `process()` runs the whole codec dance inside one `try`, so a failure (or the user pressing
+     * Cancel) lands here with codecs possibly half-configured. Every call is wrapped: stopping an
+     * unstarted codec throws `IllegalStateException`, and a leaked `MediaCodec` would keep the
+     * hardware encoder busy for the rest of the process lifetime.
+     */
+    private fun releaseQuietly(vararg resources: Any?) {
+        for (resource in resources) {
+            when (resource) {
+                null -> Unit
+                is MediaCodec -> runCatching { resource.stop() }
+                    .also { runCatching { resource.release() } }
+                is MediaMuxer -> runCatching { resource.release() }
+                is MediaExtractor -> runCatching { resource.release() }
+                is Mat -> runCatching { resource.release() }
+                else -> Unit
+            }
         }
     }
 
@@ -411,7 +483,10 @@ class VideoProcessor @Inject constructor(
     // ---------------------------------------------------------------------------------------------
 
     /**
-     * Processes one decoded frame and returns the encoder input in YUV_420_PLANAR (I420) layout.
+     * Processes one decoded frame and returns the bytes for the encoder input buffer.
+     *
+     * The layout follows [colorFormat] (whatever the encoder advertised), so a device that only
+     * accepts semi-planar NV12 gets NV12 instead of a black screen.
      */
     private fun processFrame(
         frameBitmap: android.graphics.Bitmap,
@@ -423,6 +498,7 @@ class VideoProcessor @Inject constructor(
         stabilizer: TemporalStabilizer,
         blendshapeEma: BlendshapeEma,
         colorMatcher: ColorMatcher,
+        colorFormat: Int,
         warnings: MutableList<String>,
     ): ByteArray {
         // 1. Mesh (MediaPipe, VIDEO mode: the tracker reuses the previous frame).
@@ -433,13 +509,12 @@ class VideoProcessor @Inject constructor(
             if (meshes.isEmpty()) {
                 // No face this frame: passthrough. This is also what keeps the background stable.
                 val scaled = MatUtils.resize(frame, scaledWidth, scaledHeight)
-                val bytes = toI420(scaled)
+                val bytes = encodeFrame(scaled, colorFormat)
                 scaled.release()
                 return bytes
             }
 
             val working = MatUtils.resize(frame, scaledWidth, scaledHeight)
-            frame.release()
             // Mesh coordinates are in source pixels; scale them once so they line up with `working`.
             val scaleX = scaledWidth.toDouble() / frameBitmap.width
             val scaleY = scaledHeight.toDouble() / frameBitmap.height
@@ -528,16 +603,18 @@ class VideoProcessor @Inject constructor(
                 if (meshesBounds != null) blender.addGrain(working, meshesBounds, null, amount = 0.5f)
             }
 
-            val bytes = toI420(working)
+            val bytes = encodeFrame(working, colorFormat)
             working.release()
             return bytes
         } catch (t: Throwable) {
             Log.w(TAG, "frame processing failed, passing the frame through", t)
+            // `frame` belongs to the caller's try/finally: release it there, not here.
             val passthrough = MatUtils.resize(frame, scaledWidth, scaledHeight)
-            val bytes = toI420(passthrough)
+            val bytes = encodeFrame(passthrough, colorFormat)
             passthrough.release()
-            frame.release()
             return bytes
+        } finally {
+            frame.release()
         }
     }
 
@@ -561,6 +638,70 @@ class VideoProcessor @Inject constructor(
     // ---------------------------------------------------------------------------------------------
     // Codec plumbing
     // ---------------------------------------------------------------------------------------------
+
+    /**
+     * Picks a YUV 4:2:0 colour format the encoder actually advertises.
+     *
+     * `COLOR_FormatYUV420Flexible` is preferred because the framework then does the layout
+     * conversion for us on most SoCs; planar and semi-planar are the fallbacks. Requesting a format
+     * the codec does not list makes `configure()` throw, which is the classic "video export does
+     * nothing" bug, so the list always comes from `CodecCapabilities`.
+     */
+    private fun pickColorFormat(mime: String, width: Int, height: Int): Int {
+        val fallback = MediaCodecInfoCodec.COLOR_FORMAT_YUV420_PLANAR
+        val supports = runCatching {
+            val info = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecs.firstOrNull { codec ->
+                codec.isEncoder &&
+                    codec.supportedTypes.any { it.equals(mime, ignoreCase = true) } &&
+                    runCatching {
+                        codec.getCapabilitiesForType(mime).isFormatSupported(
+                            MediaFormat.createVideoFormat(mime, width, height),
+                        )
+                    }.getOrDefault(true)
+            } ?: return@runCatching null
+            info.getCapabilitiesForType(mime).colorFormats.toSet()
+        }.getOrNull() ?: return fallback
+
+        return MediaCodecInfoCodec.COLOR_FORMAT_YUV420_FLEXIBLE.takeIf { it in supports }
+            ?: MediaCodecInfoCodec.COLOR_FORMAT_YUV420_SEMI_PLANAR.takeIf { it in supports }
+            ?: MediaCodecInfoCodec.COLOR_FORMAT_QCOM_SEMI_PLANAR.takeIf { it in supports }
+            ?: MediaCodecInfoCodec.COLOR_FORMAT_YUV420_PLANAR.takeIf { it in supports }
+            ?: fallback
+    }
+
+    /** Converts an RGB mat into the byte layout the encoder's input buffer expects. */
+    private fun encodeFrame(rgb: Mat, colorFormat: Int): ByteArray = when (colorFormat) {
+        MediaCodecInfoCodec.COLOR_FORMAT_YUV420_SEMI_PLANAR,
+        MediaCodecInfoCodec.COLOR_FORMAT_QCOM_SEMI_PLANAR,
+        MediaCodecInfoCodec.COLOR_FORMAT_NV21,
+        -> {
+            val nv21 = colorFormat == MediaCodecInfoCodec.COLOR_FORMAT_NV21
+            val bytes = rgbToBytes(rgb)
+            val width = rgb.cols()
+            val height = rgb.rows()
+            if (nv21) YuvUtils.rgbToNv21(bytes, width, height) else YuvUtils.rgbToNv12(bytes, width, height)
+        }
+
+        // COLOR_FormatYUV420Flexible is planar on every encoder we have seen, and planar is also
+        // what a flexible-buffer encoder accepts when it is driven through an ImageReader.
+        else -> {
+            val bytes = rgbToBytes(rgb)
+            YuvUtils.rgbToI420(bytes, rgb.cols(), rgb.rows())
+        }
+    }
+
+    /** Copies a `CV_8UC3` RGB mat into an interleaved RGB888 byte array. */
+    private fun rgbToBytes(rgb: Mat): ByteArray {
+        val bytes = ByteArray(rgb.cols() * rgb.rows() * 3)
+        rgb.get(0, 0, bytes)
+        return bytes
+    }
+
+    /** RGB mat -> I420 (kept public: the photo path and the tests use it). */
+    fun toI420(rgb: Mat): ByteArray = YuvUtils.rgbToI420(rgbToBytes(rgb), rgb.cols(), rgb.rows())
+
+    /** RGB mat -> NV12. */
+    fun toNv12(rgb: Mat): ByteArray = YuvUtils.rgbToNv12(rgbToBytes(rgb), rgb.cols(), rgb.rows())
 
     /**
      * Decodes one output buffer into a Bitmap.
@@ -593,7 +734,7 @@ class VideoProcessor @Inject constructor(
         val bytes = ByteArray(info.size)
         buffer.position(info.offset)
         buffer.get(bytes)
-        return BitmapUtils.argbArrayToBitmap(i420ToArgb(bytes, width, height), width, height)
+        return BitmapUtils.argbArrayToBitmap(YuvUtils.i420ToArgb(bytes, width, height), width, height)
     }
 
     /**
@@ -630,105 +771,20 @@ class VideoProcessor @Inject constructor(
                 val uvCol = x / 2
                 val uValue = uBuffer.get(uRowStart + uvCol * uPixelStride).toInt() and 0xFF
                 val vValue = vBuffer.get(vRowStart + uvCol * vPixelStride).toInt() and 0xFF
-                pixels[y * width + x] = yuvToArgb(yValue, uValue, vValue)
+                pixels[y * width + x] = YuvUtils.yuvToArgb(yValue, uValue, vValue)
             }
         }
         return pixels
-    }
-
-    /** BT.601 studio swing YUV -> ARGB (the Android default for video). */
-    private fun yuvToArgb(y: Int, u: Int, v: Int): Int {
-        val yf = (y - 16).coerceAtLeast(0) * 1.164f
-        val uf = u - 128
-        val vf = v - 128
-        val r = (yf + 1.596f * vf).roundToInt().coerceIn(0, 255)
-        val g = (yf - 0.391f * uf - 0.813f * vf).roundToInt().coerceIn(0, 255)
-        val b = (yf + 2.018f * uf).roundToInt().coerceIn(0, 255)
-        return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-    }
-
-    /** Planar I420 byte array -> ARGB (used by the buffer fallback). */
-    private fun i420ToArgb(bytes: ByteArray, width: Int, height: Int): IntArray {
-        val pixels = IntArray(width * height)
-        val frameSize = width * height
-        val uOffset = frameSize
-        val vOffset = frameSize + frameSize / 4
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                val yValue = bytes[y * width + x].toInt() and 0xFF
-                val uvIndex = (y / 2) * (width / 2) + (x / 2)
-                val uValue = bytes[uOffset + uvIndex].toInt() and 0xFF
-                val vValue = bytes[vOffset + uvIndex].toInt() and 0xFF
-                pixels[y * width + x] = yuvToArgb(yValue, uValue, vValue)
-            }
-        }
-        return pixels
-    }
-
-    /** RGB mat -> I420 byte array (encoder input). */
-    fun toI420(rgb: Mat): ByteArray {
-        val width = rgb.cols()
-        val height = rgb.rows()
-        val frameSize = width * height
-        val out = ByteArray(frameSize + frameSize / 2)
-        val pixels = ByteArray(frameSize * 3)
-        rgb.get(0, 0, pixels)
-        var yIndex = 0
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                val i = (y * width + x) * 3
-                val r = pixels[i].toInt() and 0xFF
-                val g = pixels[i + 1].toInt() and 0xFF
-                val b = pixels[i + 2].toInt() and 0xFF
-                out[yIndex++] = (0.257f * r + 0.504f * g + 0.098f * b + 16f).roundToInt().coerceIn(0, 255).toByte()
-            }
-        }
-        var uvIndex = frameSize
-        for (y in 0 until height step 2) {
-            for (x in 0 until width step 2) {
-                var rSum = 0
-                var gSum = 0
-                var bSum = 0
-                for (dy in 0 until 2) for (dx in 0 until 2) {
-                    val sx = min(x + dx, width - 1)
-                    val sy = min(y + dy, height - 1)
-                    val i = (sy * width + sx) * 3
-                    rSum += pixels[i].toInt() and 0xFF
-                    gSum += pixels[i + 1].toInt() and 0xFF
-                    bSum += pixels[i + 2].toInt() and 0xFF
-                }
-                val r = rSum / 4f
-                val g = gSum / 4f
-                val b = bSum / 4f
-                out[uvIndex++] = (-0.148f * r - 0.291f * g + 0.439f * b + 128f).roundToInt().coerceIn(0, 255).toByte()
-            }
-        }
-        // The V plane follows the U plane (I420 = Y, U, V).
-        var vIndex = frameSize + frameSize / 4
-        for (y in 0 until height step 2) {
-            for (x in 0 until width step 2) {
-                var rSum = 0
-                var gSum = 0
-                var bSum = 0
-                for (dy in 0 until 2) for (dx in 0 until 2) {
-                    val sx = min(x + dx, width - 1)
-                    val sy = min(y + dy, height - 1)
-                    val i = (sy * width + sx) * 3
-                    rSum += pixels[i].toInt() and 0xFF
-                    gSum += pixels[i + 1].toInt() and 0xFF
-                    bSum += pixels[i + 2].toInt() and 0xFF
-                }
-                val r = rSum / 4f
-                val g = gSum / 4f
-                val b = bSum / 4f
-                out[vIndex++] = (0.439f * r - 0.368f * g - 0.071f * b + 128f).roundToInt().coerceIn(0, 255).toByte()
-            }
-        }
-        return out
     }
 
     /** Copies the audio track sample by sample into the muxer (`-c:a copy`). */
-    private fun copyAudio(input: Uri, muxer: MediaMuxer, trackIndex: Int, info: MediaCodec.BufferInfo) {
+    private fun copyAudio(
+        input: Uri,
+        muxer: MediaMuxer,
+        trackIndex: Int,
+        info: MediaCodec.BufferInfo,
+        endUs: Long = Long.MAX_VALUE,
+    ) {
         if (trackIndex < 0) return
         val extractor = MediaExtractor()
         try {
@@ -738,11 +794,11 @@ class VideoProcessor @Inject constructor(
             val maxSize = extractor.getTrackFormat(audioTrack).getIntegerOrDefault(MediaFormat.KEY_MAX_INPUT_SIZE, 256 * 1024)
             val buffer = ByteBuffer.allocateDirect(maxSize.coerceAtLeast(64 * 1024))
             while (true) {
-                val size = extractor.readSampleData(buffer, 0)
+                val size = extractorRef.readSampleData(buffer, 0)
                 if (size < 0) break
                 info.offset = 0
                 info.size = size
-                info.presentationTimeUs = extractor.sampleTime
+                info.presentationTimeUs = time
                 info.flags = if (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
                 muxer.writeSampleData(trackIndex, buffer, info)
                 extractor.advance()
@@ -800,7 +856,20 @@ class VideoProcessor @Inject constructor(
 
     /** MediaCodec colour formats we ask for (kept local so the file has no hidden imports). */
     private object MediaCodecInfoCodec {
-        const val COLOR_FORMAT_YUV420_PLANAR = 19 // MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar
+        /** `MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible` */
+        const val COLOR_FORMAT_YUV420_FLEXIBLE = 0x7F420888
+
+        /** `COLOR_FormatYUV420Planar` (I420). */
+        const val COLOR_FORMAT_YUV420_PLANAR = 19
+
+        /** `COLOR_FormatYUV420SemiPlanar` (NV12). */
+        const val COLOR_FORMAT_YUV420_SEMI_PLANAR = 21
+
+        /** Qualcomm's semi-planar alias (`COLOR_QCOM_FormatYUV420SemiPlanar`), same NV12 layout. */
+        const val COLOR_FORMAT_QCOM_SEMI_PLANAR = 0x7FA30C00
+
+        /** `COLOR_FormatYUV420SemiPlanar` with the V/U order swizzled (NV21). */
+        const val COLOR_FORMAT_NV21 = 0x7FA30C02
     }
 }
 

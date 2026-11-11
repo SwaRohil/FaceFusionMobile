@@ -156,10 +156,19 @@ but the ceiling is the **device encoder**, not the app:
   VBR`, `KEY_I_FRAME_INTERVAL = 1`), then the **written file is measured** with
   `MediaMetadataRetriever`. If the encoder silently capped the output, the result screen says so
   instead of claiming 4K.
+* The colour format is **negotiated with the encoder** (`MediaCodecList` → `CodecCapabilities`)
+  instead of assumed: `COLOR_FormatYUV420Flexible`, NV12, Qualcomm's semi-planar alias, NV21 and
+  planar I420 are all supported, and `YuvUtils` produces whichever layout came back. Picking a
+  format the codec does not advertise is the classic "export finishes but the video is green"
+  failure, so the conversion is unit tested (`YuvUtilsTest`).
+* The output timeline starts at 0 regardless of the source `presentationTimeUs` (a trimmed clip or a
+  file with a non-zero start plays correctly), and portrait capture is rotated in the pixels rather
+  than relying on encoder-side rotation metadata.
 * HEVC is offered as a toggle: roughly half the bitrate for the same quality, and every recent
   Snapdragon does it in hardware. It stays off by default so the file plays everywhere.
-* Audio is stream-copied through `MediaExtractor` → `MediaMuxer` when "copy audio" is on. Bit-exact,
-  no quality loss, no ffmpeg dependency.
+* Audio is stream-copied through `MediaExtractor` → `MediaMuxer` when "copy audio" is on, using the
+  *original* track format (so `csd-0`/`csd-1` survive) and honouring the trim window. Bit-exact, no
+  quality loss, no ffmpeg dependency.
 * Defaults: 2160p, 24 Mbps, H.264, copy audio. The bitrate slider goes 12–48 Mbps and the card
   shows the estimated output size before you start.
 
@@ -272,7 +281,8 @@ FaceFusionMobile/
 ## Tests and checks
 
 ```bash
-tools/verify.sh                 # required files, strings, manifest, models.json, leftovers
+tools/verify.sh                 # required files, strings, manifest, models.json,
+                                # balanced braces/comments, leftovers
 tools/verify.sh --with-build    # the same, then ./gradlew test + assembleDebug
 ./gradlew :app:testDebugUnitTest
 ```
@@ -281,6 +291,7 @@ JVM unit tests cover the pure logic that does not need a GPU or a device:
 
 * `HashUtilsTest` — SHA-256 / CRC32 digests, digest verification, streaming of large files
 * `BlendshapeEmaTest` — filter response, frozen-face detection, blink amplitude, reset
+* `YuvUtilsTest` — I420/NV12/NV21 layouts, BT.601 studio-swing levels, 2×2 chroma averaging, round trip
 * `FaceGeometryTest` — five-point ordering, roll/yaw/pitch on synthetic meshes, 80 px minimum,
   ArcFace template values
 
@@ -296,6 +307,7 @@ Instrumented tests (`app/src/androidTest`) are for the parts that need real code
 | "Face too small" warning | Faces under 80 px do not have enough detail for a convincing swap. Crop closer. |
 | Video render is very slow | Battery saver forces the CPU provider. Use **Max** or **Balanced** while charging. |
 | Duplicate notification channels after upgrade | Uninstall/reinstall once; channel settings are owned by the system. |
+| Render cancelled / failed and no file appears | Intentional: a partial MP4 is deleted and the codecs are torn down, so the next render starts clean. The reason is shown on the video screen. |
 
 ## Licence notes
 

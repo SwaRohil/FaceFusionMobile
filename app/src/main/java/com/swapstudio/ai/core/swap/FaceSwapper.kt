@@ -323,7 +323,8 @@ class FaceSwapper @Inject constructor(
      */
     private fun estimateSwappedLandmarks(frame: Mat, landmarks: MatOfPoint2f): MatOfPoint2f? {
         if (landmarks.total() < 5) return null
-        val points = landmarks.toArray()
+        // `toArray()` is platform-typed (Point[]!), so pass an explicit non-null array.
+        val points: Array<Point> = landmarks.toArray()
         return MatOfPoint2f(*points)
     }
 
@@ -345,14 +346,18 @@ class FaceSwapper @Inject constructor(
         FaceGeometry.fivePoint(mesh.landmarks)
 
     /** Builds the five point mat from a detector result. */
-    fun landmarksFromDetection(face: com.swapstudio.ai.core.detection.DetectedFace): MatOfPoint2f =
-        MatOfPoint2f(*face.landmarks)
+    fun landmarksFromDetection(face: com.swapstudio.ai.core.detection.DetectedFace): MatOfPoint2f {
+        // The Kotlin view of `Point[]` is `Array<Point!>?`; naming the target type keeps the spread
+        // operator happy without a null assertion.
+        val points: Array<Point> = face.landmarks
+        return MatOfPoint2f(*points)
+    }
 
     /** Five point mat from a mesh. */
     fun landmarksFromMeshPoints(points: Array<Point>): MatOfPoint2f = FaceGeometry.fivePoint(points)
 
     /** Convenience overload using plain points. */
-    fun landmarksOf(points: List<Point>): MatOfPoint2f = MatOfPoint2f(*points.toTypedArray())
+    fun landmarksOf(points: List<Point>): MatOfPoint2f = MatOfPoint2f(*points.toTypedArray<Point>())
 
     /** Simple 5-point template mat for a target face at [size] (exposed for tests). */
     fun templatePoints(template: DoubleArray, size: Int): PointArray = PointArray(
