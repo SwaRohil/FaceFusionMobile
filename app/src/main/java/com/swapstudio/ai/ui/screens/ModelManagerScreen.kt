@@ -242,10 +242,16 @@ private fun ModelCard(
                         color = SwapColors.TextSecondary,
                     )
                 }
-                state.message?.let {
-                    if (state.status == DownloadStatus.ERROR) {
+                state.message?.let { message ->
+                    // Errors are red, but a paused transfer also has something to say ("waiting for
+                    // Wi-Fi", "paused by user") and that is exactly what the user needs to see.
+                    if (state.status == DownloadStatus.ERROR || state.status == DownloadStatus.PAUSED) {
                         Spacer(Modifier.height(4.dp))
-                        Text(it, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 11.sp), color = SwapColors.Hot)
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 11.sp),
+                            color = if (state.status == DownloadStatus.ERROR) SwapColors.Hot else SwapColors.Warning,
+                        )
                     }
                 }
             }

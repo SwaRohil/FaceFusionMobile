@@ -58,6 +58,7 @@ data class VideoSwapUiState(
     val warnings: List<String> = emptyList(),
     val consentAccepted: Boolean = false,
     val hyperRealistic: Boolean = true,
+    val grainMatch: Boolean = true,
     val enhancerStrength: Int = 70,
     val outputHeight: Int = 2160,
     val hevc: Boolean = false,
@@ -92,9 +93,28 @@ class VideoSwapViewModel @Inject constructor(
     private var sourceBitmap: Bitmap? = null
     private var renderJob: Job? = null
 
+    /** Set once the previous identity donor has been re-opened, so it never overrides a new pick. */
+    private var restoreAttempted = false
+
     init {
         viewModelScope.launch {
-            settingsRepository.settings.collect { settings -> applySettings(settings) }
+            settingsRepository.settings.collect { settings ->
+                applySettings(settings)
+                // Re-open the identity photo from the last session (same grant rules as the photo
+                // screen). The clip itself is never restored: rendering 4K from a stale URI is not
+                // something the user asked for by opening the screen.
+                val last = settings.lastSourceUri
+                if (!restoreAttempted && last != null) {
+                    restoreAttempted = true
+                    runCatching {
+                        val uri = Uri.parse(last)
+                        val bitmap = photoPipeline.loadBitmap(uri, maxDimension = 2048)
+                        sourceBitmap?.recycle()
+                        sourceBitmap = bitmap
+                        _state.value = _state.value.copy(sourceUri = uri, sourcePreview = bitmap)
+                    }
+                }
+            }
         }
         viewModelScope.launch { models.ensureLoaded() }
     }
@@ -104,6 +124,7 @@ class VideoSwapViewModel @Inject constructor(
             consentAccepted = settings.consentAccepted,
             hyperRealistic = settings.hyperRealistic,
             enhancerStrength = settings.enhancerStrength,
+            grainMatch = settings.grainMatch,
             outputHeight = settings.videoHeight,
             hevc = settings.hevc,
             bitrateMbps = settings.bitrateMbps,
@@ -148,6 +169,14 @@ class VideoSwapViewModel @Inject constructor(
         }
     }
 
+    /** Drops the restored identity donor so a stale photo is never rendered by accident. */
+    fun clearSource() {
+        sourceBitmap?.recycle()
+        sourceBitmap = null
+        _state.value = _state.value.copy(sourceUri = null, sourcePreview = null)
+        viewModelScope.launch { settingsRepository.setLastSource(null) }
+    }
+
     /** Loads the identity donor photo. */
     fun onSourcePicked(uri: Uri) {
         viewModelScope.launch {
@@ -157,6 +186,7 @@ class VideoSwapViewModel @Inject constructor(
                 sourceBitmap?.recycle()
                 sourceBitmap = bitmap
                 _state.value = _state.value.copy(sourceUri = uri, sourcePreview = bitmap, busy = false)
+                settingsRepository.setLastSource(uri.toString())
                 when (val verdict = safety.checkImage(bitmap)) {
                     is ContentVerdict.Blocked -> _state.value = _state.value.copy(blocked = verdict.reason)
                     else -> Unit
@@ -208,6 +238,7 @@ class VideoSwapViewModel @Inject constructor(
                     copyAudio = current.copyAudio,
                     hyperRealistic = current.hyperRealistic,
                     enhancerStrength = current.enhancerStrength,
+                    grainMatch = current.grainMatch,
                     performanceMode = current.performanceMode,
                 )
                 val result = processor.process(

@@ -33,6 +33,14 @@ class SettingsViewModel @Inject constructor(
     val settings: StateFlow<AppSettings> = settingsRepository.settings
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
+    init {
+        // The downloader reads this synchronously before it opens a socket, so it has to follow the
+        // stored preference rather than being read from DataStore inside a 1 GB transfer.
+        viewModelScope.launch {
+            settingsRepository.settings.collect { models.onWifiOnlyChanged(it.wifiOnlyDownloads) }
+        }
+    }
+
     fun setConsent(value: Boolean) = viewModelScope.launch { settingsRepository.setConsent(value) }
     fun setPerformanceMode(value: PerformanceMode) = viewModelScope.launch { settingsRepository.setPerformanceMode(value) }
     fun setHyperRealistic(value: Boolean) = viewModelScope.launch { settingsRepository.setHyperRealistic(value) }
@@ -44,6 +52,13 @@ class SettingsViewModel @Inject constructor(
     fun setBitrate(mbps: Int) = viewModelScope.launch { settingsRepository.setBitrateMbps(mbps) }
     fun setCopyAudio(value: Boolean) = viewModelScope.launch { settingsRepository.setCopyAudio(value) }
     fun setGrainMatch(value: Boolean) = viewModelScope.launch { settingsRepository.setGrainMatch(value) }
+    fun setWifiOnly(value: Boolean) = viewModelScope.launch { settingsRepository.setWifiOnly(value) }
+    fun setMeshOverlayColor(argb: Int) = viewModelScope.launch { settingsRepository.setMeshColor(argb) }
+    /** Forgets the last picked images (they are restored on the next launch otherwise). */
+    fun forgetLastSession() = viewModelScope.launch {
+        settingsRepository.setLastSource(null)
+        settingsRepository.setLastTarget(null)
+    }
 
     /** Wipes preferences and closes the inference sessions (keeps the downloaded weights). */
     fun reset() {

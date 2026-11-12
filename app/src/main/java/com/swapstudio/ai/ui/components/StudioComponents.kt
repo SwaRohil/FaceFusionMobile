@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -157,6 +158,58 @@ fun StudioSecondaryButton(
             style = MaterialTheme.typography.labelLarge,
             color = if (enabled) SwapColors.TextPrimary else SwapColors.TextDisabled,
         )
+    }
+}
+
+/**
+ * Row of colour swatches for a single-choice setting (used by the mesh overlay colour).
+ *
+ * Each swatch is a circle in its own colour; the selected one gets a ring so it is obvious even for
+ * low-contrast palettes, and the whole row is a single row of 40 dp touch targets.
+ */
+@Composable
+fun StudioColorSwatches(
+    colors: List<Int>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    labels: List<String>? = null,
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        colors.forEachIndexed { index, argb ->
+            val isSelected = argb == selected
+            val colour = Color(argb)
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .border(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) SwapColors.TextPrimary else SwapColors.Outline,
+                        shape = CircleShape,
+                    )
+                    .clickable { onSelect(argb) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(if (isSelected) 26.dp else 22.dp)
+                        .background(colour, CircleShape),
+                )
+            }
+            if (labels != null && labels.getOrNull(index) != null) {
+                Text(
+                    labels[index],
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isSelected) SwapColors.TextPrimary else SwapColors.TextSecondary,
+                )
+                if (index != colors.lastIndex) Spacer(Modifier.width(2.dp))
+            }
+        }
     }
 }
 

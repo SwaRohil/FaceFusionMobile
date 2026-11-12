@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.swapstudio.ai.core.swap.MeshOverlayPalette
 import com.swapstudio.ai.core.swap.PerformanceMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -85,7 +86,7 @@ class SettingsRepository @Inject constructor(
             bitrateMbps = (prefs[Keys.BITRATE] ?: 24).coerceIn(8, 60),
             copyAudio = prefs[Keys.COPY_AUDIO] ?: true,
             grainMatch = prefs[Keys.GRAIN] ?: true,
-            meshOverlayColor = prefs[Keys.MESH_COLOR] ?: 0xFF00E5C0.toInt(),
+            meshOverlayColor = prefs[Keys.MESH_COLOR] ?: MeshOverlayPalette.MINT,
             wifiOnlyDownloads = prefs[Keys.WIFI_ONLY] ?: false,
             lastSourceUri = prefs[Keys.LAST_SOURCE],
             lastTargetUri = prefs[Keys.LAST_TARGET],
@@ -105,6 +106,9 @@ class SettingsRepository @Inject constructor(
     suspend fun setCopyAudio(value: Boolean) = put { it[Keys.COPY_AUDIO] = value }
     suspend fun setGrainMatch(value: Boolean) = put { it[Keys.GRAIN] = value }
     suspend fun setWifiOnly(value: Boolean) = put { it[Keys.WIFI_ONLY] = value }
+
+    /** Mesh overlay accent (ARGB). Restricted to the palette the overlay UI offers. */
+    suspend fun setMeshColor(argb: Int) = put { it[Keys.MESH_COLOR] = argb }
     // `MutablePreferences.remove(key)` is the DataStore overload; importing kotlin.collections'
     // `remove(index)` next to it is what produced the deprecation warning, so the calls are written
     // out explicitly through the preferences receiver.

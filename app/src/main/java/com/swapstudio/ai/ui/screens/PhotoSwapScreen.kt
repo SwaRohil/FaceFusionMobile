@@ -132,6 +132,21 @@ fun PhotoSwapScreen(
                 onPickTarget = { openPicker(PhotoSlot.TARGET) },
                 onSwap = viewModel::swapRoles,
             )
+            // The previous session is restored automatically; this is the way out of it.
+            if (state.sourcePreview != null || state.targetPreview != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Forget these photos",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SwapColors.TextSecondary,
+                    modifier = Modifier
+                        .clickable {
+                            viewModel.clearImages()
+                            viewModel.forgetSession()
+                        }
+                        .padding(vertical = 4.dp, horizontal = 2.dp),
+                )
+            }
 
             if (state.sourceFaces.size > 1) {
                 Spacer(Modifier.height(12.dp))

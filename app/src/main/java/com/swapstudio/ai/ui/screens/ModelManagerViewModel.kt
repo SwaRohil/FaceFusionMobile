@@ -96,8 +96,15 @@ class ModelManagerViewModel @Inject constructor(
     fun onAction(row: ModelRow) {
         when (row.primaryAction) {
             ModelAction.DOWNLOAD, ModelAction.RESUME, ModelAction.UPDATE -> {
-                models.startDownload(row.descriptor)
-                message.value = "Downloading ${row.descriptor.name}"
+                val blocked = models.blockedByPolicy()
+                if (blocked != null) {
+                    // Say it once, clearly, instead of leaving the card at "Paused" with no reason.
+                    message.value = blocked.message
+                    models.publishBlocked(row.descriptor, blocked)
+                } else {
+                    models.startDownload(row.descriptor)
+                    message.value = "Downloading ${row.descriptor.name}"
+                }
             }
             ModelAction.PAUSE -> {
                 models.pauseDownload(row.descriptor.id)
@@ -115,8 +122,14 @@ class ModelManagerViewModel @Inject constructor(
         }
     }
 
-    /** Starts every missing required model. */
+    /** Starts every missing required model, unless the network policy forbids it right now. */
     fun downloadAll() {
+        val blocked = models.blockedByPolicy()
+        if (blocked != null) {
+            message.value = blocked.message
+            _state.value.rows.forEach { models.publishBlocked(it.descriptor, blocked) }
+            return
+        }
         models.downloadAll()
         message.value = "Downloading every required model"
     }

@@ -51,6 +51,8 @@ data class VideoExportOptions(
     val copyAudio: Boolean = true,
     val hyperRealistic: Boolean = true,
     val enhancerStrength: Int = 70,
+    /** Match the source grain on every frame (independent of the detail pass). */
+    val grainMatch: Boolean = true,
     val performanceMode: PerformanceMode = PerformanceMode.MAX,
     /** Only swap this face index (null = every face). */
     val targetFaceIndex: Int? = null,
@@ -595,7 +597,8 @@ class VideoProcessor @Inject constructor(
             }
 
             // 6. Grain match on the whole frame keeps the face from looking "cleaner" than the scene.
-            if (options.hyperRealistic) {
+            //    Driven by its own switch: GFPGAN smooths, grain puts the texture back.
+            if (options.grainMatch) {
                 val meshesBounds = meshes.firstOrNull()?.let { m ->
                     val points = Array(m.landmarks.size) { i -> Point(m.landmarks[i].x * scaleX, m.landmarks[i].y * scaleY) }
                     FaceGeometry.boundsFromMesh(points)

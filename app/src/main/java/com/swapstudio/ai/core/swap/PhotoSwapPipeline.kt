@@ -53,8 +53,10 @@ data class PhotoAnalysis(
 /**
  * Configuration for one photo swap, straight from the UI.
  *
- * @param hyperRealistic the big toggle; when off the GFPGAN pass and the grain match are skipped
+ * @param hyperRealistic the big toggle; when off the GFPGAN detail pass is skipped
  * @param enhancerStrength slider 0..100 -> GFPGAN fidelity weight
+ * @param grainMatch copy the target's film grain onto the swapped face (independent of the detail
+ *   pass, so the texture can be kept while the enhancer is off)
  * @param keepTargetExpression blendshape transfer is not applicable to stills; kept for symmetry
  * @param upscaleTo4k runs Real-ESRGAN tiling up to 4K before saving
  * @param exportPng true = PNG (lossless), false = JPEG quality 100
@@ -62,12 +64,43 @@ data class PhotoAnalysis(
 data class PhotoSwapSettings(
     val hyperRealistic: Boolean = true,
     val enhancerStrength: Int = 70,
+    val grainMatch: Boolean = true,
     val keepTargetExpression: Boolean = true,
     val upscaleTo4k: Boolean = false,
     val exportPng: Boolean = false,
     val showMesh: Boolean = false,
     val performanceMode: PerformanceMode = PerformanceMode.MAX,
 )
+
+/** Colours offered for the mesh overlay (ARGB, as stored in [com.swapstudio.ai.data.AppSettings]). */
+object MeshOverlayPalette {
+    /** Mint: the app accent. */
+    const val MINT = 0xFF00E5C0.toInt()
+
+    /** Hot pink: stands out on skin tones. */
+    const val PINK = 0xFFFF3D71.toInt()
+
+    /** Amber: visible on dark footage. */
+    const val AMBER = 0xFFFFB020.toInt()
+
+    /** White: the neutral choice for screenshots. */
+    const val WHITE = 0xFFF5F7FA.toInt()
+
+    /** Every selectable colour, in the order the settings chips show them. */
+    val ALL: List<Int> = listOf(MINT, PINK, AMBER, WHITE)
+
+    /** Human readable name, used by the settings chips and the diagnostics row. */
+    fun name(argb: Int): String = when (argb) {
+        MINT -> "Mint"
+        PINK -> "Pink"
+        AMBER -> "Amber"
+        WHITE -> "White"
+        else -> "#%08X".format(argb)
+    }
+}
+
+/** Default mesh accent (kept as a top level constant so the default parameter is a compile time value). */
+const val MESH_ACCENT_MINT: Int = 0xFF00E5C0.toInt()
 
 /** Hardware mode selected on the home screen / settings. */
 enum class PerformanceMode {
@@ -310,6 +343,10 @@ class PhotoSwapPipeline @Inject constructor(
                     if (!enhanced) warnings += "Hyper realistic enhancer is not installed - detail pass skipped."
                     mask.release()
                     affine.release()
+                }
+                // Grain is independent of the detail pass: GFPGAN smooths skin, the grain pass puts
+                // the sensor texture back. Off means the swap keeps the enhancer's clean look.
+                if (settings.grainMatch) {
                     onProgress(0.82f, "Matching film grain")
                     blender.addGrain(result, targetMesh.bounds, null, amount = 0.85f)
                 }
@@ -415,34 +452,47 @@ class PhotoSwapPipeline @Inject constructor(
      * This is the "mesh overlay toggle" debug view: it makes it obvious whether the tracker is locked on
      * (dots follow the face, iris points sit in the pupils) before the user spends a minute on a 4K swap.
      */
-    suspend fun meshOverlay(bitmap: Bitmap, mesh: com.swapstudio.ai.core.mesh.MeshFace): Mat =
-        withContext(Dispatchers.Default) {
-            val rgb = BitmapUtils.bitmapToRgb(bitmap)
-            val canvas = rgb.clone()
-            val accent = org.opencv.core.Scalar(0.0, 229.0, 192.0) // mint, RGB order
-            // Every landmark as a small dot.
-            mesh.landmarks.forEachIndexed { index, point ->
-                val radius = if (index >= FaceGeometry.MESH_POINT_COUNT) 2 else 1
-                Imgproc.circle(canvas, point, radius, accent, -1, Imgproc.LINE_AA, 0)
-            }
-            // Silhouette.
-            val oval = org.opencv.core.MatOfPoint(*FaceGeometry.FACE_OVAL.map { mesh.landmarks[it] }.toTypedArray())
-            Imgproc.polylines(canvas, listOf(oval), true, org.opencv.core.Scalar(124.0, 92.0, 255.0), 2, Imgproc.LINE_AA, 0)
-            oval.release()
-            // Eyes and lips.
-            listOf(FaceGeometry.RIGHT_EYE_RING, FaceGeometry.LEFT_EYE_RING, FaceGeometry.LIPS_OUTER).forEach { ring ->
-                val poly = org.opencv.core.MatOfPoint(*ring.map { mesh.landmarks[it] }.toTypedArray())
-                Imgproc.polylines(canvas, listOf(poly), true, org.opencv.core.Scalar(255.0, 61.0, 113.0), 2, Imgproc.LINE_AA, 0)
-                poly.release()
-            }
-            // Iris centres get a ring so a failed iris detection is immediately visible.
-            if (mesh.landmarks.size > FaceGeometry.LEFT_IRIS_CENTER) {
-                Imgproc.circle(canvas, mesh.landmarks[FaceGeometry.RIGHT_IRIS_CENTER], 4, org.opencv.core.Scalar(255.0, 176.0, 32.0), 1, Imgproc.LINE_AA, 0)
-                Imgproc.circle(canvas, mesh.landmarks[FaceGeometry.LEFT_IRIS_CENTER], 4, org.opencv.core.Scalar(255.0, 176.0, 32.0), 1, Imgproc.LINE_AA, 0)
-            }
-            rgb.release()
-            canvas
+    suspend fun meshOverlay(
+        bitmap: Bitmap,
+        mesh: com.swapstudio.ai.core.mesh.MeshFace,
+        accentArgb: Int = MESH_ACCENT_MINT,
+    ): Mat = withContext(Dispatchers.Default) {
+        val rgb = BitmapUtils.bitmapToRgb(bitmap)
+        val canvas = rgb.clone()
+        val accent = argbToRgbScalar(accentArgb)
+        // Every landmark as a small dot.
+        mesh.landmarks.forEachIndexed { index, point ->
+            val radius = if (index >= FaceGeometry.MESH_POINT_COUNT) 2 else 1
+            Imgproc.circle(canvas, point, radius, accent, -1, Imgproc.LINE_AA, 0)
         }
+        // Silhouette.
+        val oval = org.opencv.core.MatOfPoint(*FaceGeometry.FACE_OVAL.map { mesh.landmarks[it] }.toTypedArray())
+        Imgproc.polylines(canvas, listOf(oval), true, org.opencv.core.Scalar(124.0, 92.0, 255.0), 2, Imgproc.LINE_AA, 0)
+        oval.release()
+        // Eyes and lips.
+        listOf(FaceGeometry.RIGHT_EYE_RING, FaceGeometry.LEFT_EYE_RING, FaceGeometry.LIPS_OUTER).forEach { ring ->
+            val poly = org.opencv.core.MatOfPoint(*ring.map { mesh.landmarks[it] }.toTypedArray())
+            Imgproc.polylines(canvas, listOf(poly), true, org.opencv.core.Scalar(255.0, 61.0, 113.0), 2, Imgproc.LINE_AA, 0)
+            poly.release()
+        }
+        // Iris centres get a ring so a failed iris detection is immediately visible.
+        if (mesh.landmarks.size > FaceGeometry.LEFT_IRIS_CENTER) {
+            Imgproc.circle(canvas, mesh.landmarks[FaceGeometry.RIGHT_IRIS_CENTER], 4, org.opencv.core.Scalar(255.0, 176.0, 32.0), 1, Imgproc.LINE_AA, 0)
+            Imgproc.circle(canvas, mesh.landmarks[FaceGeometry.LEFT_IRIS_CENTER], 4, org.opencv.core.Scalar(255.0, 176.0, 32.0), 1, Imgproc.LINE_AA, 0)
+        }
+        rgb.release()
+        canvas
+    }
+
+    /**
+     * Converts an ARGB colour (what DataStore stores and Compose renders) into an OpenCV scalar in
+     * **RGB** channel order, which is the order this pipeline works in.
+     */
+    private fun argbToRgbScalar(argb: Int): org.opencv.core.Scalar = org.opencv.core.Scalar(
+        ((argb shr 16) and 0xFF).toDouble(),
+        ((argb shr 8) and 0xFF).toDouble(),
+        (argb and 0xFF).toDouble(),
+    )
 
     /** Chooses the mesh that best matches a detector box. */
     private fun pickMesh(meshes: List<MeshFace>, face: DetectedFace): MeshFace? {

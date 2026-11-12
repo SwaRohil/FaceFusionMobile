@@ -24,8 +24,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.swapstudio.ai.core.swap.MeshOverlayPalette
 import com.swapstudio.ai.core.swap.PerformanceMode
 import com.swapstudio.ai.ui.components.StudioCard
+import com.swapstudio.ai.ui.components.StudioColorSwatches
 import com.swapstudio.ai.ui.components.StudioModeChip
 import com.swapstudio.ai.ui.components.StudioSecondaryButton
 import com.swapstudio.ai.ui.components.StudioTopBar
@@ -141,6 +143,20 @@ fun SettingsScreen(
                         checked = settings.showMesh,
                         onCheckedChange = viewModel::setShowMesh,
                     )
+                    if (settings.showMesh) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Overlay colour - ${MeshOverlayPalette.name(settings.meshOverlayColor)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = SwapColors.TextSecondary,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        StudioColorSwatches(
+                            colors = MeshOverlayPalette.ALL,
+                            selected = settings.meshOverlayColor,
+                            onSelect = viewModel::setMeshOverlayColor,
+                        )
+                    }
                     StudioToggleRow(
                         title = "Upscale exports to 4K",
                         subtitle = "Real-ESRGAN x2 before saving",
@@ -212,6 +228,12 @@ fun SettingsScreen(
                         color = SwapColors.TextSecondary,
                     )
                     Spacer(Modifier.height(8.dp))
+                    StudioToggleRow(
+                        title = "Downloads on Wi-Fi only",
+                        subtitle = "Never spend mobile data on model weights",
+                        checked = settings.wifiOnlyDownloads,
+                        onCheckedChange = viewModel::setWifiOnly,
+                    )
                     StudioToggleRow(
                         title = "Consent accepted",
                         subtitle = "Required before any swap can run",

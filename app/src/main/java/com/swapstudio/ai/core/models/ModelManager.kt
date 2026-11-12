@@ -5,14 +5,17 @@ import android.os.StatFs
 import android.util.Log
 import com.swapstudio.ai.core.inference.OrtEngine
 import com.swapstudio.ai.core.inference.SessionSpec
+import com.swapstudio.ai.data.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -40,6 +43,7 @@ sealed class ModelIssue {
 @Singleton
 class ModelManager @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val settings: SettingsRepository,
 ) {
     private val catalog = ModelCatalog(context)
     val store = ModelStore(context)
@@ -53,6 +57,57 @@ class ModelManager @Inject constructor(
 
     private val _installed = MutableStateFlow<Set<String>>(emptySet())
     val installed: StateFlow<Set<String>> = _installed.asStateFlow()
+
+    /**
+     * Mirrors Settings → "Downloads on Wi-Fi only". The Settings screen pushes every change here, and
+     * [startDownload] refuses to open a socket while the policy says no, so a 1 GB model pack can
+     * never surprise the user on mobile data.
+     */
+    private var wifiOnlyCache: Boolean? = null
+
+    /**
+     * Reads Settings → "Downloads on Wi-Fi only".
+     *
+     * The downloader needs the answer *synchronously* before it opens a socket, and a DataStore read
+     * is a coroutine hop, so the first read blocks for a few milliseconds (DataStore has the value in
+     * memory after the first collection) and every later call is a field read. The Settings screen
+     * keeps the cache fresh through [onWifiOnlyChanged].
+     */
+    fun wifiOnlyDownloads(): Boolean = wifiOnlyCache ?: runBlocking {
+        val value = runCatching { settings.settings.first().wifiOnlyDownloads }.getOrDefault(false)
+        wifiOnlyCache = value
+        value
+    }
+
+    /** Called by the settings screen so the next download sees the new value immediately. */
+    fun onWifiOnlyChanged(value: Boolean) {
+        wifiOnlyCache = value
+    }
+
+    /**
+     * Returns why a download may not start right now, or null when it may.
+     *
+     * Checked by the UI *before* it calls [startDownload] so the user gets one clear message instead
+     * of a silently paused card; [startDownload] checks again because the state can change between
+     * the tap and the coroutine actually running.
+     */
+    fun blockedByPolicy(): DownloadPolicy.Verdict? {
+        val verdict = DownloadPolicy.current(context, wifiOnlyDownloads())
+        return if (verdict is DownloadPolicy.Verdict.Allowed) null else verdict
+    }
+
+    /** Publishes a paused state with [verdict]'s message so the card explains itself. */
+    fun publishBlocked(descriptor: ModelDescriptor, verdict: DownloadPolicy.Verdict) {
+        downloader.update(
+            DownloadState(
+                descriptor.id,
+                DownloadStatus.PAUSED,
+                bytesDownloaded = store.installedBytes(descriptor),
+                totalBytes = descriptor.sizeBytes,
+                message = verdict.message ?: "Download paused",
+            ),
+        )
+    }
 
     private val loadMutex = Mutex()
     private var loaded = false
@@ -142,6 +197,20 @@ class ModelManager @Inject constructor(
                     DownloadState(descriptor.id, DownloadStatus.COMPLETED, 1f, store.installedBytes(descriptor), store.installedBytes(descriptor), message = "Installed"),
                 )
                 return@launch
+            }
+            // Network policy first: no point checking storage for a transfer that may not start.
+            when (val verdict = DownloadPolicy.current(context, wifiOnlyDownloads())) {
+                is DownloadPolicy.Verdict.Allowed -> Unit
+                else -> {
+                    downloader.update(
+                        DownloadState(
+                            descriptor.id,
+                            DownloadStatus.PAUSED,
+                            message = verdict.message ?: "Download paused",
+                        ),
+                    )
+                    return@launch
+                }
             }
             when (val issue = checkStorage(descriptor)) {
                 is ModelIssue.NotEnoughSpace -> {

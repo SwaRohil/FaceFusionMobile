@@ -181,6 +181,18 @@ fun VideoSwapScreen(
                 onClick = { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 modifier = Modifier.fillMaxWidth(0.46f),
             )
+            // The donor photo is restored from the last session; make it easy to get rid of.
+            if (state.sourcePreview != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Forget this photo",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SwapColors.TextSecondary,
+                    modifier = Modifier
+                        .clickable { viewModel.clearSource() }
+                        .padding(vertical = 4.dp, horizontal = 2.dp),
+                )
+            }
 
             state.blocked?.let {
                 Spacer(Modifier.height(12.dp))

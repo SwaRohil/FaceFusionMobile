@@ -8,6 +8,8 @@ import com.swapstudio.ai.core.detection.FaceDetector
 import com.swapstudio.ai.core.models.ModelManager
 import com.swapstudio.ai.core.safety.ContentVerdict
 import com.swapstudio.ai.core.safety.MediaSafety
+import com.swapstudio.ai.core.swap.MESH_ACCENT_MINT
+import com.swapstudio.ai.core.swap.MeshOverlayPalette
 import com.swapstudio.ai.core.swap.PerformanceMode
 import com.swapstudio.ai.core.swap.PhotoAnalysis
 import com.swapstudio.ai.core.swap.PhotoSwapPipeline
@@ -57,6 +59,8 @@ data class PhotoSwapUiState(
     val hyperRealistic: Boolean = true,
     val enhancerStrength: Int = 70,
     val showMesh: Boolean = false,
+    val meshOverlayColor: Int = MESH_ACCENT_MINT,
+    val grainMatch: Boolean = true,
     val exportPng: Boolean = false,
     val upscale4k: Boolean = true,
     val performanceMode: PerformanceMode = PerformanceMode.MAX,
@@ -87,11 +91,89 @@ class PhotoSwapViewModel @Inject constructor(
     private var sourceBitmap: Bitmap? = null
     private var targetBitmap: Bitmap? = null
 
+    /**
+     * Set once the "restore the last session" attempt has run, so it never fights the user.
+     * [clearImages] also sets it: otherwise deleting the photos would restore them again on the next
+     * DataStore emission.
+     */
+    private var restoreAttempted = false
+
     init {
         viewModelScope.launch {
-            settingsRepository.settings.collect { settings -> applySettings(settings) }
+            settingsRepository.settings.collect { settings ->
+                applySettings(settings)
+                // Restore the previous pair exactly once: after that the user is in charge (and a
+                // deleted photo must not reappear every time the flow re-emits).
+                if (!restoreAttempted && (settings.lastSourceUri != null || settings.lastTargetUri != null)) {
+                    restoreAttempted = true
+                    restoreLastSession(settings)
+                }
+            }
         }
         viewModelScope.launch { models.ensureLoaded() }
+    }
+
+    /**
+     * Re-opens the images from the previous session.
+     *
+     * The stored URIs come from the photo picker and stay readable for as long as the app holds the
+     * grant, but they can also be stale (photo deleted, permission revoked, app data restored on
+     * another device). Every failure is silent: a missing thumb is not an error the user needs to
+     * see, and the picker is right there.
+     */
+    private suspend fun restoreLastSession(settings: AppSettings) {
+        val source = settings.lastSourceUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val target = settings.lastTargetUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        var restoredSomething = false
+        for ((slot, uri) in listOf(PhotoSlot.SOURCE to source, PhotoSlot.TARGET to target)) {
+            if (uri == null) continue
+            val bitmap = runCatching { pipeline.loadBitmap(uri, maxDimension = 4096) }.getOrNull() ?: continue
+            when (slot) {
+                PhotoSlot.SOURCE -> {
+                    sourceBitmap?.recycle()
+                    sourceBitmap = bitmap
+                    _state.value = _state.value.copy(sourceUri = uri, sourcePreview = bitmap)
+                }
+                PhotoSlot.TARGET -> {
+                    targetBitmap?.recycle()
+                    targetBitmap = bitmap
+                    _state.value = _state.value.copy(targetUri = uri, targetPreview = bitmap)
+                }
+            }
+            restoredSomething = true
+        }
+        if (restoredSomething) {
+            _state.value = _state.value.copy(stage = "Restored your last session")
+            detect()
+        }
+    }
+
+    /** Drops both bitmaps and every derived preview (the "Forget these photos" affordance). */
+    fun clearImages() {
+        restoreAttempted = true
+        sourceBitmap?.recycle()
+        targetBitmap?.recycle()
+        sourceBitmap = null
+        targetBitmap = null
+        _state.value = PhotoSwapUiState(
+            consentAccepted = _state.value.consentAccepted,
+            hyperRealistic = _state.value.hyperRealistic,
+            enhancerStrength = _state.value.enhancerStrength,
+            showMesh = _state.value.showMesh,
+            meshOverlayColor = _state.value.meshOverlayColor,
+            grainMatch = _state.value.grainMatch,
+            exportPng = _state.value.exportPng,
+            upscale4k = _state.value.upscale4k,
+            performanceMode = _state.value.performanceMode,
+        )
+    }
+
+    /** Forgets the stored pair (used by the "clear" affordance on the pick tiles). */
+    fun forgetSession() {
+        viewModelScope.launch {
+            settingsRepository.setLastSource(null)
+            settingsRepository.setLastTarget(null)
+        }
     }
 
     private fun applySettings(settings: AppSettings) {
@@ -100,6 +182,8 @@ class PhotoSwapViewModel @Inject constructor(
             hyperRealistic = settings.hyperRealistic,
             enhancerStrength = settings.enhancerStrength,
             showMesh = settings.showMesh,
+            meshOverlayColor = settings.meshOverlayColor,
+            grainMatch = settings.grainMatch,
             exportPng = settings.exportPng,
             upscale4k = settings.upscale4k,
             performanceMode = settings.performanceMode,
@@ -244,6 +328,7 @@ class PhotoSwapViewModel @Inject constructor(
                 val settings = PhotoSwapSettings(
                     hyperRealistic = current.hyperRealistic,
                     enhancerStrength = current.enhancerStrength,
+                    grainMatch = current.grainMatch,
                     upscaleTo4k = current.upscale4k,
                     exportPng = current.exportPng,
                     showMesh = current.showMesh,
@@ -340,7 +425,7 @@ class PhotoSwapViewModel @Inject constructor(
         val analysis = _state.value.analysis ?: return@withContext null
         if (!_state.value.showMesh) return@withContext null
         val mesh = analysis.targetMesh.getOrNull(analysis.targetIndex) ?: return@withContext null
-        val overlay = pipeline.meshOverlay(bitmap, mesh)
+        val overlay = pipeline.meshOverlay(bitmap, mesh, accentArgb = _state.value.meshOverlayColor)
         val result = BitmapUtils.rgbToBitmap(overlay)
         overlay.release()
         result

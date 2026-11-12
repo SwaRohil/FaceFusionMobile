@@ -64,8 +64,10 @@ Home ──┬── Photo swap ──► Result
   (height, HEVC, copy audio, bitrate slider with an estimated file size), micro-expression controls,
   live progress (stage, %, frame count, fps, ETA) with cancel.
 * **Models** — per-model download/pause/resume/delete, byte-level progress with speed and ETA,
-  storage bar, "Download all" / "Pause all".
-* **Settings** — hardware provider, quality and video defaults, consent state, diagnostics, reset.
+  storage bar, "Download all" / "Pause all", and a clear reason on the card when a transfer is
+  waiting for Wi-Fi or has no connection.
+* **Settings** — hardware provider, quality and video defaults (including the mesh overlay colour
+  swatches), Wi-Fi-only downloads, consent state, diagnostics, reset.
 * **Result** — ExoPlayer preview or before/after slider, quality card (resolution, frames, bitrate,
   whether the file really met the 4K/20 Mbps bar), save-to-gallery with progress, share, open.
 
@@ -171,6 +173,22 @@ but the ceiling is the **device encoder**, not the app:
   quality loss, no ffmpeg dependency.
 * Defaults: 2160p, 24 Mbps, H.264, copy audio. The bitrate slider goes 12–48 Mbps and the card
   shows the estimated output size before you start.
+
+## Settings that are actually wired
+
+Every switch in Settings changes behaviour; nothing is decoration:
+
+| Setting | Effect |
+|---|---|
+| Hyper Realistic Mode | GFPGAN detail pass on/off for photos and video |
+| Enhancer strength | GFPGAN fidelity weight (0 = maximum restoration, 100 = maximum identity fidelity) |
+| Mesh overlay + colour | Debug landmark view on the target face, drawn in the chosen accent |
+| Upscale exports to 4K / PNG photos | Real-ESRGAN tiling and lossless encoding on save |
+| Film grain matching | Grain pass on the photo *and* the video path, independent of the detail pass |
+| H.265, keep audio, bitrate | Video encoder configuration |
+| Downloads on Wi-Fi only | `DownloadPolicy` refuses to open a socket on a metered network and says why |
+| Consent | Gates every swap; also enforced inside the pipeline |
+| Last picked photos | Restored on the next launch, with a "Forget these photos" escape hatch |
 
 ## Privacy, safety and labelling
 
